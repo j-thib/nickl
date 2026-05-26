@@ -161,6 +161,9 @@ export default function GroupDetailPage({
             expenses={expenses}
             nameById={nameById}
             currentUserId={user?.id}
+            isPercentageGroup={
+              group.split_mode === 'percentage' && members.length === 2
+            }
             onEdit={(expense) => setSheetState({ mode: 'edit', expense })}
             onDelete={handleDelete}
           />
@@ -323,12 +326,14 @@ function ExpensesTab({
   expenses,
   nameById,
   currentUserId,
+  isPercentageGroup,
   onEdit,
   onDelete,
 }: {
   expenses: ExpenseWithSplits[]
   nameById: Record<string, string>
   currentUserId: string | undefined
+  isPercentageGroup: boolean
   onEdit: (expense: ExpenseWithSplits) => void
   onDelete: (id: string) => void
 }) {
@@ -344,6 +349,7 @@ function ExpensesTab({
           expense={e}
           nameById={nameById}
           currentUserId={currentUserId}
+          isPercentageGroup={isPercentageGroup}
           onEdit={onEdit}
           onDelete={onDelete}
         />
@@ -382,19 +388,35 @@ function ExpenseCard({
   expense,
   nameById,
   currentUserId,
+  isPercentageGroup,
   onEdit,
   onDelete,
 }: {
   expense: ExpenseWithSplits
   nameById: Record<string, string>
   currentUserId: string | undefined
+  isPercentageGroup: boolean
   onEdit: (expense: ExpenseWithSplits) => void
   onDelete: (id: string) => void
 }) {
   const isMine = expense.created_by === currentUserId
-  const splitLabels = expense.splits
-    .map((s) => nameById[s.user_id] ?? 'Unknown')
-    .join(', ')
+  const amount = Number(expense.amount)
+
+  const splitText = (() => {
+    if (expense.splits.length === 0) return null
+    if (isPercentageGroup && amount > 0) {
+      return expense.splits
+        .map((s) => {
+          const pct = Math.round((Number(s.share_amount) / amount) * 100)
+          const name = nameById[s.user_id] ?? 'Unknown'
+          return `${name} ${pct}%`
+        })
+        .join(' · ')
+    }
+    return `Split between ${expense.splits
+      .map((s) => nameById[s.user_id] ?? 'Unknown')
+      .join(', ')}`
+  })()
 
   const body = (
     <div className="flex items-start gap-3">
@@ -408,10 +430,8 @@ function ExpenseCard({
             {nameById[expense.paid_by] ?? 'Unknown'}
           </span>
         </div>
-        {expense.splits.length > 0 && (
-          <div className="mt-1 text-xs text-muted">
-            Split between {splitLabels}
-          </div>
+        {splitText && (
+          <div className="mt-1 text-xs text-muted">{splitText}</div>
         )}
       </div>
       <div className="text-right shrink-0">
@@ -749,15 +769,43 @@ function Stat({ label, value }: { label: string; value: string }) {
 // Expense sheet (new + edit)
 // ---------------------------------------------------------------------------
 
-// Splits `amountCents` into `n` per-person dollar amounts; the first
-// `amountCents mod n` people get one extra cent so the parts sum exactly
-// to amountCents.
-function distributeCents(amountCents: number, n: number): number[] {
-  const base = Math.floor(amountCents / n)
-  const extras = amountCents - base * n
-  return Array.from({ length: n }, (_, i) =>
-    (i < extras ? base + 1 : base) / 100,
+// Splits `amountCents` into per-person dollar amounts, returned in the same
+// order as `userIds`. Without weights, splits evenly (first `amountCents mod
+// n` people get +1 cent). With weights (user_id -> percentage, summing to
+// ~100), floors each ideal share and distributes the unallocated cents to
+// the users with the largest fractional remainders.
+function distributeCents(
+  amountCents: number,
+  userIds: string[],
+  weights?: Record<string, number>,
+): number[] {
+  const n = userIds.length
+  if (n === 0) return []
+
+  if (!weights) {
+    const base = Math.floor(amountCents / n)
+    const extras = amountCents - base * n
+    return userIds.map((_, i) => (i < extras ? base + 1 : base) / 100)
+  }
+
+  const ideals = userIds.map(
+    (uid) => (amountCents * (weights[uid] ?? 0)) / 100,
   )
+  const floors = ideals.map((x) => Math.floor(x))
+  const fractions = ideals.map((x, i) => x - floors[i])
+  const allocated = floors.reduce((s, c) => s + c, 0)
+  const remainder = amountCents - allocated
+
+  // Indices sorted by fractional part desc, with stable index tiebreak.
+  const indices = userIds
+    .map((_, i) => i)
+    .sort((a, b) => fractions[b] - fractions[a] || a - b)
+
+  const result = [...floors]
+  for (let i = 0; i < remainder; i++) {
+    result[indices[i]] += 1
+  }
+  return result.map((c) => c / 100)
 }
 
 function ExpenseSheet({
@@ -776,6 +824,9 @@ function ExpenseSheet({
   onSaved: (expense: ExpenseWithSplits) => void
 }) {
   const isEdit = existing !== null
+  const isPercentageGroup =
+    group.split_mode === 'percentage' && members.length === 2
+
   const initialPaidBy = existing
     ? existing.paid_by
     : (members.find((m) => m.user_id === currentUserId)?.user_id ??
@@ -798,6 +849,51 @@ function ExpenseSheet({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Pre-fill percentages from group defaults, or reverse-compute from
+  // existing splits when editing.
+  const [pctInputs, setPctInputs] = useState<Record<string, string>>(() => {
+    if (!isPercentageGroup) return {}
+    const result: Record<string, string> = {}
+    if (existing && existing.splits.length === 2 && Number(existing.amount) > 0) {
+      const total = Number(existing.amount)
+      for (const s of existing.splits) {
+        const pct = (Number(s.share_amount) / total) * 100
+        // Two-decimal rounding for clean display.
+        result[s.user_id] = String(Math.round(pct * 100) / 100)
+      }
+    }
+    for (const m of members) {
+      if (!(m.user_id in result)) {
+        result[m.user_id] = String(Number(m.split_percentage ?? 50))
+      }
+    }
+    return result
+  })
+
+  // Auto-open Adjust when editing an expense whose splits don't match what
+  // the group's defaults would produce — signals it's already customized.
+  const [customizeOpen, setCustomizeOpen] = useState(() => {
+    if (!existing || !isPercentageGroup) return false
+    const total = Math.round(Number(existing.amount) * 100)
+    if (total <= 0) return false
+    const ids = members.map((m) => m.user_id)
+    const defaultWeights: Record<string, number> = {}
+    for (const m of members) {
+      defaultWeights[m.user_id] = Number(m.split_percentage ?? 50)
+    }
+    const defaultShares = distributeCents(total, ids, defaultWeights)
+    const existingCentsByUser = new Map(
+      existing.splits.map((s) => [
+        s.user_id,
+        Math.round(Number(s.share_amount) * 100),
+      ]),
+    )
+    return ids.some((uid, i) => {
+      const existingCents = existingCentsByUser.get(uid) ?? 0
+      return existingCents !== Math.round(defaultShares[i] * 100)
+    })
+  })
+
   function toggleSplit(userId: string) {
     setSplitBetween((prev) => {
       const next = new Set(prev)
@@ -805,6 +901,31 @@ function ExpenseSheet({
       else next.add(userId)
       return next
     })
+  }
+
+  function updatePct(userId: string, val: string) {
+    const num = parseFloat(val)
+    const other = members.find((m) => m.user_id !== userId)
+    setPctInputs((prev) => {
+      const next = { ...prev, [userId]: val }
+      if (other && Number.isFinite(num)) {
+        const otherVal = Math.round((100 - num) * 100) / 100
+        next[other.user_id] = String(otherVal)
+      }
+      return next
+    })
+  }
+
+  function toggleCustomize() {
+    if (customizeOpen) {
+      // Closing: reset to group defaults, discarding any per-expense edits.
+      const defaults: Record<string, string> = {}
+      for (const m of members) {
+        defaults[m.user_id] = String(Number(m.split_percentage ?? 50))
+      }
+      setPctInputs(defaults)
+    }
+    setCustomizeOpen((o) => !o)
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -829,11 +950,33 @@ function ExpenseSheet({
       return
     }
 
+    // Build weights for percentage groups when both members are involved.
+    // For single-selected (1 person) or non-percentage groups, fall through
+    // to even-split.
+    let weights: Record<string, number> | undefined
+    if (isPercentageGroup && ids.length === 2) {
+      const w: Record<string, number> = {}
+      for (const uid of ids) {
+        const pct = parseFloat(pctInputs[uid] ?? '50')
+        if (!Number.isFinite(pct)) {
+          setError('Enter valid percentages')
+          return
+        }
+        w[uid] = pct
+      }
+      const sum = ids.reduce((s, uid) => s + w[uid], 0)
+      if (Math.abs(sum - 100) > 0.5) {
+        setError('Percentages must sum to 100')
+        return
+      }
+      weights = w
+    }
+
     setSubmitting(true)
     setError(null)
 
     const totalCents = Math.round(amtNum * 100)
-    const shares = distributeCents(totalCents, ids.length)
+    const shares = distributeCents(totalCents, ids, weights)
     const trimmed = description.trim()
 
     if (existing) {
@@ -1015,6 +1158,69 @@ function ExpenseSheet({
               )
             })}
           </div>
+
+          {isPercentageGroup &&
+            splitBetween.size === 2 &&
+            (() => {
+              const amtNum = parseFloat(amount)
+              const validAmount = Number.isFinite(amtNum) && amtNum > 0
+              const ids = members
+                .map((m) => m.user_id)
+                .filter((u) => splitBetween.has(u))
+              const weights: Record<string, number> = {}
+              for (const uid of ids) {
+                const pct = parseFloat(pctInputs[uid] ?? '50')
+                weights[uid] = Number.isFinite(pct) ? pct : 0
+              }
+              const previewShares = validAmount
+                ? distributeCents(Math.round(amtNum * 100), ids, weights)
+                : ids.map(() => 0)
+
+              return (
+                <div className="mt-3 text-xs text-muted">
+                  <span className="font-mono tabular text-ink">
+                    {previewShares.map((s) => formatUSD(s)).join(' / ')}
+                  </span>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={toggleCustomize}
+                    className="text-brand font-medium hover:text-brand-dark"
+                  >
+                    {customizeOpen ? 'Use group default' : 'Adjust'}
+                  </button>
+                  {customizeOpen && (
+                    <div className="mt-2 bg-card rounded-lg border border-gray-100 divide-y divide-gray-100">
+                      {members.map((m) => (
+                        <div
+                          key={m.id}
+                          className="px-3 py-2 flex items-center justify-between gap-3 min-h-[48px]"
+                        >
+                          <span className="text-sm text-ink truncate">
+                            {m.display_name}
+                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              min="0"
+                              max="100"
+                              value={pctInputs[m.user_id] ?? ''}
+                              onChange={(e) =>
+                                updatePct(m.user_id, e.target.value)
+                              }
+                              className="w-20 px-2 py-1.5 border border-gray-300 rounded text-right font-mono tabular text-sm focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+                            />
+                            <span className="text-sm text-muted">%</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
         </div>
 
         {error && (

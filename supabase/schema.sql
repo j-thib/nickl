@@ -19,17 +19,34 @@ create table if not exists public.groups (
   name        text not null,
   invite_code text not null unique,
   created_by  uuid not null references auth.users (id) on delete cascade,
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  split_mode  text not null default 'equal'
+              check (split_mode in ('equal', 'percentage'))
 );
 
 create table if not exists public.group_members (
-  id           uuid primary key default gen_random_uuid(),
-  group_id     uuid not null references public.groups (id) on delete cascade,
-  user_id      uuid not null references auth.users (id) on delete cascade,
-  display_name text not null,
-  joined_at    timestamptz not null default now(),
+  id               uuid primary key default gen_random_uuid(),
+  group_id         uuid not null references public.groups (id) on delete cascade,
+  user_id          uuid not null references auth.users (id) on delete cascade,
+  display_name     text not null,
+  joined_at        timestamptz not null default now(),
+  split_percentage numeric,  -- non-null only when split_mode = 'percentage'
   unique (group_id, user_id)
 );
+
+-- Idempotent migrations for existing schemas; no-op on fresh installs.
+alter table public.groups
+  add column if not exists split_mode text not null default 'equal';
+
+do $$ begin
+  alter table public.groups
+    add constraint groups_split_mode_check
+    check (split_mode in ('equal', 'percentage'));
+exception when duplicate_object then null;
+end $$;
+
+alter table public.group_members
+  add column if not exists split_percentage numeric;
 
 create table if not exists public.expenses (
   id          uuid primary key default gen_random_uuid(),

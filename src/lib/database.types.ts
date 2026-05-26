@@ -16,6 +16,7 @@ export interface Database {
           invite_code: string
           created_by: string
           created_at: string
+          split_mode: 'equal' | 'percentage'
         }
         Insert: {
           id?: string
@@ -23,6 +24,7 @@ export interface Database {
           invite_code: string
           created_by: string
           created_at?: string
+          split_mode?: 'equal' | 'percentage'
         }
         Update: {
           id?: string
@@ -30,6 +32,7 @@ export interface Database {
           invite_code?: string
           created_by?: string
           created_at?: string
+          split_mode?: 'equal' | 'percentage'
         }
         Relationships: [
           {
@@ -47,6 +50,7 @@ export interface Database {
           user_id: string
           display_name: string
           joined_at: string
+          split_percentage: number | null
         }
         Insert: {
           id?: string
@@ -54,6 +58,7 @@ export interface Database {
           user_id: string
           display_name: string
           joined_at?: string
+          split_percentage?: number | null
         }
         Update: {
           id?: string
@@ -61,6 +66,7 @@ export interface Database {
           user_id?: string
           display_name?: string
           joined_at?: string
+          split_percentage?: number | null
         }
         Relationships: [
           {
