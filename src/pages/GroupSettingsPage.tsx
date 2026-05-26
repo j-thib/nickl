@@ -36,8 +36,16 @@ export default function GroupSettingsPage({
 
   const [leaving, setLeaving] = useState(false)
 
+  const [editingSplitMode, setEditingSplitMode] = useState(false)
+  const [splitModeDraft, setSplitModeDraft] = useState<
+    'equal' | 'percentage'
+  >(group.split_mode)
+  const [pctDrafts, setPctDrafts] = useState<Record<string, string>>({})
+  const [savingSplitMode, setSavingSplitMode] = useState(false)
+
   const isCreator = user?.id === group.created_by
   const me = members.find((m) => m.user_id === user?.id)
+  const isTwoPerson = members.length === 2
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -113,6 +121,104 @@ export default function GroupSettingsPage({
     )
     setEditingDisplayName(false)
     showToast('Display name updated')
+  }
+
+  function startEditSplitMode() {
+    setSplitModeDraft(group.split_mode)
+    // Initial input values: use saved percentages if present, else 50/50.
+    const next: Record<string, string> = {}
+    for (const m of members) {
+      const val = m.split_percentage
+      next[m.user_id] =
+        val == null || Number.isNaN(val) ? '50' : String(Number(val))
+    }
+    setPctDrafts(next)
+    setEditingSplitMode(true)
+  }
+
+  function updatePctDraft(userId: string, val: string) {
+    const num = parseFloat(val)
+    const other = members.find((m) => m.user_id !== userId)
+    setPctDrafts((prev) => {
+      const next = { ...prev, [userId]: val }
+      if (other && Number.isFinite(num)) {
+        // Auto-balance the other side so the pair sums to 100.
+        const otherVal = Math.round((100 - num) * 100) / 100
+        next[other.user_id] = String(otherVal)
+      }
+      return next
+    })
+  }
+
+  async function handleSaveSplitMode(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!isCreator || !isTwoPerson) return
+
+    setSavingSplitMode(true)
+    setError(null)
+
+    let pctA: number | null = null
+    let pctB: number | null = null
+
+    if (splitModeDraft === 'percentage') {
+      pctA = parseFloat(pctDrafts[members[0].user_id])
+      pctB = parseFloat(pctDrafts[members[1].user_id])
+      if (!Number.isFinite(pctA) || !Number.isFinite(pctB)) {
+        setError('Enter valid percentages')
+        setSavingSplitMode(false)
+        return
+      }
+      if (Math.abs(pctA + pctB - 100) > 0.5) {
+        setError('Percentages must sum to 100')
+        setSavingSplitMode(false)
+        return
+      }
+    }
+
+    // Update the group first, then the two member rows. Not transactional;
+    // a partial failure surfaces an error and the user can retry.
+    const { data: updatedGroup, error: groupErr } = await supabase
+      .from('groups')
+      .update({ split_mode: splitModeDraft })
+      .eq('id', group.id)
+      .select()
+      .single()
+    if (groupErr || !updatedGroup) {
+      setError(groupErr?.message ?? 'Could not save split mode')
+      setSavingSplitMode(false)
+      return
+    }
+
+    const memberUpdates =
+      splitModeDraft === 'percentage'
+        ? [
+            { id: members[0].id, split_percentage: pctA },
+            { id: members[1].id, split_percentage: pctB },
+          ]
+        : members.map((m) => ({ id: m.id, split_percentage: null }))
+
+    for (const update of memberUpdates) {
+      const { error: memErr } = await supabase
+        .from('group_members')
+        .update({ split_percentage: update.split_percentage })
+        .eq('id', update.id)
+      if (memErr) {
+        setError(memErr.message)
+        setSavingSplitMode(false)
+        return
+      }
+    }
+
+    setMembers((prev) =>
+      prev.map((m) => {
+        const u = memberUpdates.find((x) => x.id === m.id)
+        return u ? { ...m, split_percentage: u.split_percentage } : m
+      }),
+    )
+    onGroupUpdated(updatedGroup)
+    setEditingSplitMode(false)
+    setSavingSplitMode(false)
+    showToast('Split mode updated')
   }
 
   async function handleCopyInvite() {
@@ -317,6 +423,112 @@ export default function GroupSettingsPage({
               </Section>
             )}
 
+            {/* Split mode — 2-person groups only */}
+            {isTwoPerson && (
+              <Section title="Split mode">
+                {editingSplitMode ? (
+                  <form
+                    onSubmit={handleSaveSplitMode}
+                    className="space-y-3"
+                  >
+                    <div className="flex bg-gray-100 rounded-lg p-1">
+                      <button
+                        type="button"
+                        onClick={() => setSplitModeDraft('equal')}
+                        className={`flex-1 py-2.5 text-sm font-medium rounded-md transition min-h-[44px] ${
+                          splitModeDraft === 'equal'
+                            ? 'bg-card text-brand shadow-sm'
+                            : 'text-muted'
+                        }`}
+                      >
+                        Equal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSplitModeDraft('percentage')}
+                        className={`flex-1 py-2.5 text-sm font-medium rounded-md transition min-h-[44px] ${
+                          splitModeDraft === 'percentage'
+                            ? 'bg-card text-brand shadow-sm'
+                            : 'text-muted'
+                        }`}
+                      >
+                        Custom %
+                      </button>
+                    </div>
+
+                    {splitModeDraft === 'percentage' && (
+                      <div className="bg-card rounded-xl border border-gray-100 divide-y divide-gray-100">
+                        {members.map((m) => (
+                          <div
+                            key={m.id}
+                            className="px-4 py-3 flex items-center justify-between gap-3 min-h-[56px]"
+                          >
+                            <span className="text-ink truncate">
+                              {m.display_name}
+                            </span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                step="0.01"
+                                min="0"
+                                max="100"
+                                value={pctDrafts[m.user_id] ?? ''}
+                                onChange={(e) =>
+                                  updatePctDraft(m.user_id, e.target.value)
+                                }
+                                className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-right font-mono tabular focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+                              />
+                              <span className="text-sm text-muted">%</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingSplitMode(false)}
+                        className="flex-1 py-3 bg-card border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingSplitMode}
+                        className="flex-1 py-3 bg-brand text-white font-medium rounded-lg hover:bg-brand-dark disabled:opacity-60"
+                      >
+                        {savingSplitMode ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="flex items-center justify-between gap-3 bg-card rounded-xl border border-gray-100 px-4 py-3 min-h-[56px]">
+                    <span className="text-ink truncate">
+                      {group.split_mode === 'percentage'
+                        ? members
+                            .map((m) => {
+                              const pct = m.split_percentage ?? 50
+                              return `${m.display_name} ${formatPct(Number(pct))}`
+                            })
+                            .join(' · ')
+                        : 'Equal'}
+                    </span>
+                    {isCreator && (
+                      <button
+                        type="button"
+                        onClick={startEditSplitMode}
+                        className="text-sm text-brand font-medium hover:text-brand-dark px-2"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                )}
+              </Section>
+            )}
+
             {/* Members */}
             <Section title={`Members (${members.length})`}>
               <ul className="bg-card rounded-xl border border-gray-100 divide-y divide-gray-100">
@@ -352,6 +564,11 @@ export default function GroupSettingsPage({
       </div>
     </main>
   )
+}
+
+function formatPct(n: number): string {
+  // Display integers without a decimal, otherwise one decimal of precision.
+  return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`
 }
 
 function Section({
