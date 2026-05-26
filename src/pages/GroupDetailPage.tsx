@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase } from '../lib/supabase'
 import Sheet from '../components/Sheet'
+import SplitSlider from '../components/SplitSlider'
 import { CenteredSpinner } from '../components/Spinner'
 import { greedyPairing } from '../lib/settlement'
 import type {
@@ -1190,32 +1191,17 @@ function ExpenseSheet({
                     {customizeOpen ? 'Use group default' : 'Adjust'}
                   </button>
                   {customizeOpen && (
-                    <div className="mt-2 bg-card rounded-lg border border-gray-100 divide-y divide-gray-100">
-                      {members.map((m) => (
-                        <div
-                          key={m.id}
-                          className="px-3 py-2 flex items-center justify-between gap-3 min-h-[48px]"
-                        >
-                          <span className="text-sm text-ink truncate">
-                            {m.display_name}
-                          </span>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              step="0.01"
-                              min="0"
-                              max="100"
-                              value={pctInputs[m.user_id] ?? ''}
-                              onChange={(e) =>
-                                updatePct(m.user_id, e.target.value)
-                              }
-                              className="w-20 px-2 py-1.5 border border-gray-300 rounded text-right font-mono tabular text-sm focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-                            />
-                            <span className="text-sm text-muted">%</span>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="mt-3 bg-card rounded-lg border border-gray-100 px-4 py-4">
+                      <SplitSlider
+                        leftName={members[0].display_name}
+                        rightName={members[1].display_name}
+                        value={parseFloat(
+                          pctInputs[members[0].user_id] ?? '50',
+                        )}
+                        onChange={(v) =>
+                          updatePct(members[0].user_id, String(v))
+                        }
+                      />
                     </div>
                   )}
                 </div>

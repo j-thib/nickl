@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase } from '../lib/supabase'
 import { CenteredSpinner } from '../components/Spinner'
+import SplitSlider from '../components/SplitSlider'
 import type { Group, GroupMember } from '../lib/database.types'
 
 type Props = {
@@ -456,33 +457,18 @@ export default function GroupSettingsPage({
                       </button>
                     </div>
 
-                    {splitModeDraft === 'percentage' && (
-                      <div className="bg-card rounded-xl border border-gray-100 divide-y divide-gray-100">
-                        {members.map((m) => (
-                          <div
-                            key={m.id}
-                            className="px-4 py-3 flex items-center justify-between gap-3 min-h-[56px]"
-                          >
-                            <span className="text-ink truncate">
-                              {m.display_name}
-                            </span>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                step="0.01"
-                                min="0"
-                                max="100"
-                                value={pctDrafts[m.user_id] ?? ''}
-                                onChange={(e) =>
-                                  updatePctDraft(m.user_id, e.target.value)
-                                }
-                                className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-right font-mono tabular focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-                              />
-                              <span className="text-sm text-muted">%</span>
-                            </div>
-                          </div>
-                        ))}
+                    {splitModeDraft === 'percentage' && members.length === 2 && (
+                      <div className="bg-card rounded-xl border border-gray-100 px-4 py-5">
+                        <SplitSlider
+                          leftName={members[0].display_name}
+                          rightName={members[1].display_name}
+                          value={parseFloat(
+                            pctDrafts[members[0].user_id] ?? '50',
+                          )}
+                          onChange={(v) =>
+                            updatePctDraft(members[0].user_id, String(v))
+                          }
+                        />
                       </div>
                     )}
 
