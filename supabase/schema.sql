@@ -355,3 +355,87 @@ $$;
 
 revoke all on function public.leave_group(uuid) from public;
 grant execute on function public.leave_group(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Set-group-split-mode RPC.
+-- The group_members UPDATE policy only permits a row owner to update their
+-- own row, so the creator cannot write a partner's split_percentage from the
+-- client. This SECURITY DEFINER function lets the creator set both members'
+-- percentages atomically. For 'equal' mode, all members' split_percentage are
+-- cleared.
+-- ----------------------------------------------------------------------------
+
+create or replace function public.set_group_split_mode(
+  target_group_id uuid,
+  new_mode text,
+  member_a_user_id uuid default null,
+  pct_a numeric default null,
+  member_b_user_id uuid default null,
+  pct_b numeric default null
+)
+returns public.groups
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  uid uuid := auth.uid();
+  updated_group public.groups;
+begin
+  if uid is null then
+    raise exception 'not authenticated' using errcode = '42501';
+  end if;
+
+  if new_mode not in ('equal', 'percentage') then
+    raise exception 'invalid split mode: %', new_mode using errcode = '22023';
+  end if;
+
+  -- Only the group creator can change the split configuration.
+  perform 1 from public.groups
+  where id = target_group_id and created_by = uid;
+  if not found then
+    raise exception 'not authorized' using errcode = '42501';
+  end if;
+
+  if new_mode = 'percentage' then
+    if member_a_user_id is null or member_b_user_id is null
+       or pct_a is null or pct_b is null then
+      raise exception 'percentage mode requires both members and percentages'
+        using errcode = '22023';
+    end if;
+    if member_a_user_id = member_b_user_id then
+      raise exception 'members must be distinct' using errcode = '22023';
+    end if;
+    if abs((pct_a + pct_b) - 100) > 0.5 then
+      raise exception 'percentages must sum to 100' using errcode = '22023';
+    end if;
+
+    update public.groups
+       set split_mode = 'percentage'
+     where id = target_group_id
+    returning * into updated_group;
+
+    update public.group_members
+       set split_percentage = pct_a
+     where group_id = target_group_id and user_id = member_a_user_id;
+
+    update public.group_members
+       set split_percentage = pct_b
+     where group_id = target_group_id and user_id = member_b_user_id;
+  else
+    update public.groups
+       set split_mode = 'equal'
+     where id = target_group_id
+    returning * into updated_group;
+
+    update public.group_members
+       set split_percentage = null
+     where group_id = target_group_id;
+  end if;
+
+  return updated_group;
+end;
+$$;
+
+revoke all on function public.set_group_split_mode(uuid, text, uuid, numeric, uuid, numeric) from public;
+grant execute on function public.set_group_split_mode(uuid, text, uuid, numeric, uuid, numeric) to authenticated;

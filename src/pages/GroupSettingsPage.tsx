@@ -176,45 +176,39 @@ export default function GroupSettingsPage({
       }
     }
 
-    // Update the group first, then the two member rows. Not transactional;
-    // a partial failure surfaces an error and the user can retry.
-    const { data: updatedGroup, error: groupErr } = await supabase
-      .from('groups')
-      .update({ split_mode: splitModeDraft })
-      .eq('id', group.id)
-      .select()
+    // SECURITY DEFINER RPC: the group_members RLS update policy only lets
+    // each user write their own row, so the creator can't update a partner's
+    // split_percentage directly. The RPC writes both rows atomically.
+    const { data: updatedGroup, error: rpcErr } = await supabase
+      .rpc('set_group_split_mode', {
+        target_group_id: group.id,
+        new_mode: splitModeDraft,
+        member_a_user_id:
+          splitModeDraft === 'percentage' ? members[0].user_id : null,
+        pct_a: splitModeDraft === 'percentage' ? pctA : null,
+        member_b_user_id:
+          splitModeDraft === 'percentage' ? members[1].user_id : null,
+        pct_b: splitModeDraft === 'percentage' ? pctB : null,
+      })
       .single()
-    if (groupErr || !updatedGroup) {
-      setError(groupErr?.message ?? 'Could not save split mode')
+
+    if (rpcErr || !updatedGroup) {
+      setError(rpcErr?.message ?? 'Could not save split mode')
       setSavingSplitMode(false)
       return
     }
 
-    const memberUpdates =
+    const nextPercentages: Record<string, number | null> =
       splitModeDraft === 'percentage'
-        ? [
-            { id: members[0].id, split_percentage: pctA },
-            { id: members[1].id, split_percentage: pctB },
-          ]
-        : members.map((m) => ({ id: m.id, split_percentage: null }))
-
-    for (const update of memberUpdates) {
-      const { error: memErr } = await supabase
-        .from('group_members')
-        .update({ split_percentage: update.split_percentage })
-        .eq('id', update.id)
-      if (memErr) {
-        setError(memErr.message)
-        setSavingSplitMode(false)
-        return
-      }
-    }
+        ? { [members[0].user_id]: pctA, [members[1].user_id]: pctB }
+        : Object.fromEntries(members.map((m) => [m.user_id, null]))
 
     setMembers((prev) =>
-      prev.map((m) => {
-        const u = memberUpdates.find((x) => x.id === m.id)
-        return u ? { ...m, split_percentage: u.split_percentage } : m
-      }),
+      prev.map((m) =>
+        m.user_id in nextPercentages
+          ? { ...m, split_percentage: nextPercentages[m.user_id] }
+          : m,
+      ),
     )
     onGroupUpdated(updatedGroup)
     setEditingSplitMode(false)

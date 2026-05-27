@@ -249,6 +249,24 @@ export interface Database {
         Args: { target_group_id: string }
         Returns: void
       }
+      set_group_split_mode: {
+        Args: {
+          target_group_id: string
+          new_mode: 'equal' | 'percentage'
+          member_a_user_id?: string | null
+          pct_a?: number | null
+          member_b_user_id?: string | null
+          pct_b?: number | null
+        }
+        Returns: {
+          id: string
+          name: string
+          invite_code: string
+          created_by: string
+          created_at: string
+          split_mode: 'equal' | 'percentage'
+        }
+      }
     }
     Enums: { [_ in never]: never }
     CompositeTypes: { [_ in never]: never }
