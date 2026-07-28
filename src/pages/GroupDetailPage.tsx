@@ -224,7 +224,6 @@ export default function GroupDetailPage({
       <div className="sticky top-0 z-10 bg-app">
         <Header
           group={group}
-          memberCount={members.length}
           onBack={onBack}
           onOpenSettings={onOpenSettings}
         />
@@ -368,12 +367,10 @@ function defaultDateFor(month: string): string {
 
 function Header({
   group,
-  memberCount,
   onBack,
   onOpenSettings,
 }: {
   group: Group
-  memberCount: number
   onBack: () => void
   onOpenSettings: () => void
 }) {
@@ -405,12 +402,6 @@ function Header({
           <h1 className="text-lg font-semibold text-ink truncate">
             {group.name}
           </h1>
-          <span className="text-xs text-muted">
-            {memberCount} member{memberCount === 1 ? '' : 's'} · code{' '}
-            <span className="font-mono tabular tracking-wider text-gray-700">
-              {group.invite_code}
-            </span>
-          </span>
         </div>
         <button
           type="button"
