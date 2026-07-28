@@ -20,7 +20,7 @@ export default function GroupSettingsPage({
   onLeft,
   onGroupUpdated,
 }: Props) {
-  const { user } = useAuth()
+  const { user, updatePassword } = useAuth()
   const { show: showToast } = useToast()
 
   const [members, setMembers] = useState<GroupMember[]>([])
@@ -34,6 +34,14 @@ export default function GroupSettingsPage({
   const [editingDisplayName, setEditingDisplayName] = useState(false)
   const [displayNameDraft, setDisplayNameDraft] = useState('')
   const [savingDisplayName, setSavingDisplayName] = useState(false)
+
+  const [editingPassword, setEditingPassword] = useState(false)
+  const [currentPasswordDraft, setCurrentPasswordDraft] = useState('')
+  const [newPasswordDraft, setNewPasswordDraft] = useState('')
+  const [confirmPasswordDraft, setConfirmPasswordDraft] = useState('')
+  const [savingPassword, setSavingPassword] = useState(false)
+  // Kept separate from `error` so it renders inside the password form.
+  const [passwordError, setPasswordError] = useState<string | null>(null)
 
   const [leaving, setLeaving] = useState(false)
 
@@ -122,6 +130,51 @@ export default function GroupSettingsPage({
     )
     setEditingDisplayName(false)
     showToast('Display name updated')
+  }
+
+  function cancelEditPassword() {
+    setEditingPassword(false)
+    setCurrentPasswordDraft('')
+    setNewPasswordDraft('')
+    setConfirmPasswordDraft('')
+    setPasswordError(null)
+  }
+
+  async function handleSavePassword(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+
+    if (newPasswordDraft.length < 6) {
+      setPasswordError('New password must be at least 6 characters')
+      return
+    }
+    if (newPasswordDraft !== confirmPasswordDraft) {
+      setPasswordError("New passwords don't match")
+      return
+    }
+    if (newPasswordDraft === currentPasswordDraft) {
+      setPasswordError('New password must be different from the current one')
+      return
+    }
+
+    setSavingPassword(true)
+    setPasswordError(null)
+
+    const { error: updateError, currentPasswordInvalid } =
+      await updatePassword(currentPasswordDraft, newPasswordDraft)
+
+    setSavingPassword(false)
+
+    if (updateError) {
+      setPasswordError(
+        currentPasswordInvalid
+          ? 'That current password is incorrect'
+          : updateError.message,
+      )
+      return
+    }
+
+    cancelEditPassword()
+    showToast('Password updated')
   }
 
   function startEditSplitMode() {
@@ -412,6 +465,126 @@ export default function GroupSettingsPage({
                       className="text-sm text-brand font-medium hover:text-brand-dark px-2"
                     >
                       Edit
+                    </button>
+                  </div>
+                )}
+              </Section>
+            )}
+
+            {/* Password — account-wide, not group-scoped */}
+            {user?.email && (
+              <Section
+                title="Password"
+                hint="Applies to your Nickl account everywhere, not just this group."
+              >
+                {editingPassword ? (
+                  <form onSubmit={handleSavePassword} className="space-y-3">
+                    <input
+                      type="email"
+                      value={user.email}
+                      autoComplete="username"
+                      readOnly
+                      hidden
+                    />
+                    <div>
+                      <label
+                        htmlFor="current-password"
+                        className="block text-sm font-medium text-gray-700 mb-1"
+                      >
+                        Current password
+                      </label>
+                      <input
+                        id="current-password"
+                        type="password"
+                        autoComplete="current-password"
+                        autoFocus
+                        required
+                        value={currentPasswordDraft}
+                        onChange={(e) =>
+                          setCurrentPasswordDraft(e.target.value)
+                        }
+                        className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="new-password"
+                        className="block text-sm font-medium text-gray-700 mb-1"
+                      >
+                        New password
+                      </label>
+                      <input
+                        id="new-password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                        minLength={6}
+                        value={newPasswordDraft}
+                        onChange={(e) => setNewPasswordDraft(e.target.value)}
+                        className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+                      />
+                      <p className="mt-1 text-xs text-muted">
+                        At least 6 characters.
+                      </p>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="confirm-password"
+                        className="block text-sm font-medium text-gray-700 mb-1"
+                      >
+                        Confirm new password
+                      </label>
+                      <input
+                        id="confirm-password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                        minLength={6}
+                        value={confirmPasswordDraft}
+                        onChange={(e) =>
+                          setConfirmPasswordDraft(e.target.value)
+                        }
+                        className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
+                      />
+                    </div>
+
+                    {passwordError && (
+                      <div
+                        role="alert"
+                        className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
+                      >
+                        {passwordError}
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={cancelEditPassword}
+                        className="flex-1 py-3 bg-card border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingPassword}
+                        className="flex-1 py-3 bg-brand text-white font-medium rounded-lg hover:bg-brand-dark disabled:opacity-60"
+                      >
+                        {savingPassword ? 'Saving…' : 'Update password'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="flex items-center justify-between gap-3 bg-card rounded-xl border border-gray-100 px-4 py-3 min-h-[56px]">
+                    <span className="text-muted truncate">
+                      {user.email}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEditingPassword(true)}
+                      className="text-sm text-brand font-medium hover:text-brand-dark px-2 shrink-0"
+                    >
+                      Change
                     </button>
                   </div>
                 )}

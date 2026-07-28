@@ -11,6 +11,9 @@ import { supabase } from '../lib/supabase'
 
 type AuthResult = { error: AuthError | null }
 type SignUpResult = AuthResult & { emailAlreadyInUse: boolean }
+// `currentPasswordInvalid` separates "you mistyped your old password" from a
+// genuine failure, so the UI can point at the right field.
+type UpdatePasswordResult = AuthResult & { currentPasswordInvalid: boolean }
 
 type AuthContextValue = {
   user: User | null
@@ -19,6 +22,10 @@ type AuthContextValue = {
   signIn: (email: string, password: string) => Promise<AuthResult>
   signUp: (email: string, password: string) => Promise<SignUpResult>
   signOut: () => Promise<AuthResult>
+  updatePassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<UpdatePasswordResult>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -77,6 +84,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut: async () => {
         const { error } = await supabase.auth.signOut()
         return { error }
+      },
+      updatePassword: async (currentPassword, newPassword) => {
+        // Re-authenticate first. Supabase will happily change the password on
+        // any live session, so without this anyone holding an unlocked device
+        // could lock the owner out of their own account.
+        // (An account with no email can't be re-checked this way; the UI only
+        // offers the form when there is one.)
+        const email = user?.email
+        if (email) {
+          const { error: reauthError } =
+            await supabase.auth.signInWithPassword({
+              email,
+              password: currentPassword,
+            })
+          if (reauthError) {
+            return { error: reauthError, currentPasswordInvalid: true }
+          }
+        }
+        const { error } = await supabase.auth.updateUser({
+          password: newPassword,
+        })
+        return { error, currentPasswordInvalid: false }
       },
     }),
     [user, session, loading],
