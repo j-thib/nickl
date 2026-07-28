@@ -155,10 +155,10 @@ export default function CategoriesTab({
             ))}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="font-display text-[25px] tracking-tight text-ink">
+            <span className="font-mono tabular text-[22px] font-semibold tracking-tight text-ink">
               {formatUSDShort(total)}
             </span>
-            <span className="font-mono text-[8.5px] tracking-wide text-muted">
+            <span className="text-[10px] text-muted">
               {count} expense{count === 1 ? '' : 's'}
             </span>
           </div>
@@ -305,7 +305,7 @@ function SectionHead({
   trailing?: string
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 px-1 pt-6 pb-2 font-mono text-[10px] uppercase tracking-[.12em] text-muted">
+    <div className="flex items-baseline justify-between gap-3 px-1 pt-6 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
       <span>{label}</span>
       {trailing && <span>{trailing}</span>}
     </div>

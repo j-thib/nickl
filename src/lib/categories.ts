@@ -21,6 +21,7 @@ export const CATEGORY_ICONS = [
   'box',
   'fork',
   'car',
+  'plane',
   'ticket',
   'tag',
 ] as const
@@ -40,6 +41,8 @@ export const DEFAULT_CATEGORIES: CategoryDraft[] = [
   { name: 'Utilities', color: '#C97B5B', icon: 'bolt' },
   { name: 'Rent', color: '#5D6B9E', icon: 'home' },
   { name: 'Supplies', color: '#85864F', icon: 'box' },
+  { name: 'Travel', color: '#5B7E96', icon: 'plane' },
+  { name: 'Misc', color: '#8A6E8F', icon: 'tag' },
 ]
 
 /** Categories in display order: explicit sort_order first, then name. */

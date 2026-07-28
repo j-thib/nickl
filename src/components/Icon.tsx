@@ -188,6 +188,15 @@ export function TicketIcon(p: IconProps) {
   )
 }
 
+export function PlaneIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M22 2 15 22l-4-9-9-4z" />
+      <path d="M22 2 11 13" />
+    </Svg>
+  )
+}
+
 export function TagIcon(p: IconProps) {
   return (
     <Svg {...p}>
@@ -217,6 +226,8 @@ export function CategoryGlyph({
       return <CarIcon {...rest} />
     case 'ticket':
       return <TicketIcon {...rest} />
+    case 'plane':
+      return <PlaneIcon {...rest} />
     default:
       return <TagIcon {...rest} />
   }

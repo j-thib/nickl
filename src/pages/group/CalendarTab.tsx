@@ -112,10 +112,10 @@ export default function CalendarTab({
       <MonthBar month={month} setMonth={setMonth} months={months} />
 
       <div className="flex flex-col items-center pt-3 pb-4">
-        <span className="font-mono text-[10px] uppercase tracking-[.14em] text-muted">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
           {monthLabel(month)}
         </span>
-        <span className="font-display text-[42px] leading-tight tracking-tight text-ink">
+        <span className="font-mono tabular text-[34px] font-semibold leading-tight tracking-tight text-ink">
           {formatUSD(total)}
         </span>
         {delta !== null && (
@@ -135,7 +135,7 @@ export default function CalendarTab({
           {DOW.map((d, i) => (
             <span
               key={i}
-              className="text-center font-mono text-[9.5px] tracking-wide text-muted"
+              className="text-center text-[10px] font-semibold text-muted"
             >
               {d}
             </span>
@@ -192,7 +192,7 @@ export default function CalendarTab({
 
       {selectedDay ? (
         <section className="mt-5">
-          <div className="flex items-baseline justify-between gap-3 px-1 pb-2 font-mono text-[10px] uppercase tracking-[.12em] text-muted">
+          <div className="flex items-baseline justify-between gap-3 px-1 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
             <span>
               {formatWeekday(dateInMonth(month, selectedDay))},{' '}
               {monthAbbr(month)} {selectedDay}
@@ -219,7 +219,7 @@ export default function CalendarTab({
         </section>
       ) : (
         <section className="mt-5">
-          <div className="px-1 pb-2 font-mono text-[10px] uppercase tracking-[.12em] text-muted">
+          <div className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
             Last {TREND_MONTHS} months
           </div>
           <div className="flex items-end gap-1.5 bg-card border border-black/[.045] rounded-[18px] px-3 py-3.5">
@@ -250,7 +250,7 @@ export default function CalendarTab({
                     />
                   </span>
                   <span
-                    className={`font-mono text-[9.5px] ${
+                    className={`text-[10px] ${
                       active ? 'text-ink font-semibold' : 'text-muted'
                     }`}
                   >

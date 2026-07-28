@@ -402,12 +402,14 @@ function Header({
           </svg>
         </button>
         <div className="flex-1 min-w-0 text-center">
-          <h1 className="text-[16.5px] font-bold tracking-tight text-ink truncate">
+          <h1 className="text-lg font-semibold text-ink truncate">
             {group.name}
           </h1>
-          <span className="font-mono text-[10px] tracking-wide text-muted">
+          <span className="text-xs text-muted">
             {memberCount} member{memberCount === 1 ? '' : 's'} · code{' '}
-            {group.invite_code}
+            <span className="font-mono tabular tracking-wider text-gray-700">
+              {group.invite_code}
+            </span>
           </span>
         </div>
         <button

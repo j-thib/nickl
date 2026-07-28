@@ -469,7 +469,7 @@ export default function ExpenseSheet({
         {selectedIds.length > 0 && (
           <div className="bg-card border border-black/[.045] rounded-2xl p-3.5">
             <div className="flex items-center justify-between mb-2.5">
-              <span className="font-mono text-[9.5px] uppercase tracking-[.13em] text-muted">
+              <span className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">
                 Split
               </span>
               {override ? (
