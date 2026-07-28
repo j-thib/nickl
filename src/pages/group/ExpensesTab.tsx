@@ -15,6 +15,7 @@ type Props = {
   categories: ExpenseCategory[]
   categoryMap: CategoryMap
   nameById: Record<string, string>
+  memberCount: number
   currentUserId: string | undefined
   month: string
   setMonth: (month: string) => void
@@ -29,6 +30,7 @@ export default function ExpensesTab({
   categories,
   categoryMap,
   nameById,
+  memberCount,
   currentUserId,
   month,
   setMonth,
@@ -145,6 +147,7 @@ export default function ExpensesTab({
                   expense={e}
                   categories={categoryMap}
                   nameById={nameById}
+                  memberCount={memberCount}
                   onOpen={e.created_by === currentUserId ? onOpen : undefined}
                 />
               ))}
