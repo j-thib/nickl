@@ -1,25 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
 import { supabase } from '../lib/supabase'
-import Sheet from '../components/Sheet'
-import SplitSlider from '../components/SplitSlider'
 import { CenteredSpinner } from '../components/Spinner'
-import { greedyPairing } from '../lib/settlement'
+import BottomNav from '../components/BottomNav'
+import type { TabKey } from '../components/BottomNav'
+import { PlusIcon } from '../components/Icon'
+import { DEFAULT_CATEGORIES, sortCategories } from '../lib/categories'
+import { monthKey, monthRange, todayISO } from '../lib/dates'
+import ExpensesTab from './group/ExpensesTab'
+import CalendarTab from './group/CalendarTab'
+import CategoriesTab from './group/CategoriesTab'
+import SettleTab from './group/SettleTab'
+import ExpenseSheet from './group/ExpenseSheet'
+import CategorySheet from './group/CategorySheet'
+import PaymentSheet from './group/PaymentSheet'
+import type { CategoryMap, ExpenseWithSplits } from './group/types'
 import type {
-  Expense,
-  ExpenseSplit,
+  ExpenseCategory,
   Group,
   GroupMember,
   Payment,
 } from '../lib/database.types'
 
-type ExpenseWithSplits = Expense & { splits: ExpenseSplit[] }
-type TabKey = 'expenses' | 'payments' | 'settle'
-type SheetState =
+type ExpenseSheetState =
   | { mode: 'new' }
   | { mode: 'edit'; expense: ExpenseWithSplits }
+  | null
+
+type CategorySheetState =
+  | { mode: 'new' }
+  | { mode: 'edit'; category: ExpenseCategory }
   | null
 
 type Props = {
@@ -37,51 +48,80 @@ export default function GroupDetailPage({
   const { show: showToast } = useToast()
   const [tab, setTab] = useState<TabKey>('expenses')
   const [members, setMembers] = useState<GroupMember[]>([])
+  const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [expenses, setExpenses] = useState<ExpenseWithSplits[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [sheetState, setSheetState] = useState<SheetState>(null)
+  const [month, setMonth] = useState(() => monthKey(todayISO()))
+  const [filterCategoryId, setFilterCategoryId] = useState<string | null>(null)
+  const [expenseSheet, setExpenseSheet] = useState<ExpenseSheetState>(null)
+  const [categorySheet, setCategorySheet] = useState<CategorySheetState>(null)
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const [membersRes, expensesRes, paymentsRes] = await Promise.all([
-      supabase
-        .from('group_members')
-        .select('*')
-        .eq('group_id', group.id)
-        .order('joined_at'),
-      supabase
-        .from('expenses')
-        .select('*, splits:expense_splits(*)')
-        .eq('group_id', group.id)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('payments')
-        .select('*')
-        .eq('group_id', group.id)
-        .order('created_at', { ascending: false }),
-    ])
-    if (membersRes.error) {
-      setError(membersRes.error.message)
+    const [membersRes, categoriesRes, expensesRes, paymentsRes] =
+      await Promise.all([
+        supabase
+          .from('group_members')
+          .select('*')
+          .eq('group_id', group.id)
+          .order('joined_at'),
+        supabase
+          .from('expense_categories')
+          .select('*')
+          .eq('group_id', group.id),
+        supabase
+          .from('expenses')
+          .select('*, splits:expense_splits(*)')
+          .eq('group_id', group.id)
+          .order('spent_at', { ascending: false })
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('payments')
+          .select('*')
+          .eq('group_id', group.id)
+          .order('created_at', { ascending: false }),
+      ])
+
+    const failed = [membersRes, categoriesRes, expensesRes, paymentsRes].find(
+      (r) => r.error,
+    )
+    if (failed?.error) {
+      setError(failed.error.message)
       setLoading(false)
       return
     }
-    if (expensesRes.error) {
-      setError(expensesRes.error.message)
-      setLoading(false)
-      return
-    }
-    if (paymentsRes.error) {
-      setError(paymentsRes.error.message)
-      setLoading(false)
-      return
-    }
+
     setMembers(membersRes.data ?? [])
     setExpenses((expensesRes.data ?? []) as ExpenseWithSplits[])
     setPayments(paymentsRes.data ?? [])
+
+    // First visit to a group: give it a starter set of categories. The unique
+    // (group_id, name) index makes this safe if two members race.
+    let cats = categoriesRes.data ?? []
+    if (cats.length === 0) {
+      const { error: seedError } = await supabase
+        .from('expense_categories')
+        .upsert(
+          DEFAULT_CATEGORIES.map((c, i) => ({
+            ...c,
+            group_id: group.id,
+            sort_order: i,
+          })),
+          { onConflict: 'group_id,name', ignoreDuplicates: true },
+        )
+      if (!seedError) {
+        const { data: seeded } = await supabase
+          .from('expense_categories')
+          .select('*')
+          .eq('group_id', group.id)
+        cats = seeded ?? []
+      }
+    }
+    setCategories(sortCategories(cats))
     setLoading(false)
   }, [group.id])
 
@@ -90,33 +130,72 @@ export default function GroupDetailPage({
   }, [load])
 
   const nameById = useMemo(() => {
-    const m: Record<string, string> = {}
-    for (const member of members) m[member.user_id] = member.display_name
-    return m
+    const map: Record<string, string> = {}
+    for (const member of members) map[member.user_id] = member.display_name
+    return map
   }, [members])
 
-  async function handleDelete(expenseId: string) {
-    const { error: delError } = await supabase
-      .from('expenses')
-      .delete()
-      .eq('id', expenseId)
-    if (delError) {
-      setError(delError.message)
-      return
-    }
-    setExpenses((prev) => prev.filter((e) => e.id !== expenseId))
-    showToast('Expense deleted')
-  }
+  const categoryMap = useMemo<CategoryMap>(() => {
+    const map: CategoryMap = {}
+    for (const c of categories) map[c.id] = c
+    return map
+  }, [categories])
+
+  const months = useMemo(
+    () => monthRange(expenses.map((e) => e.spent_at)),
+    [expenses],
+  )
+
+  // A month can drop out of range when its last expense is deleted — fall
+  // back to the newest one rather than showing an empty scrubber selection.
+  const activeMonth =
+    months.includes(month) || months.length === 0
+      ? month
+      : months[months.length - 1]
 
   function handleExpenseSaved(expense: ExpenseWithSplits) {
-    const isEdit = sheetState?.mode === 'edit'
+    const isEdit = expenseSheet?.mode === 'edit'
     setExpenses((prev) =>
       isEdit
         ? prev.map((e) => (e.id === expense.id ? expense : e))
         : [expense, ...prev],
     )
-    setSheetState(null)
+    setExpenseSheet(null)
+    // Jump to the month the expense landed in, so it's visible right away.
+    setMonth(monthKey(expense.spent_at))
     showToast(isEdit ? 'Expense updated' : 'Expense added')
+  }
+
+  function handleExpenseDeleted(expenseId: string) {
+    setExpenses((prev) => prev.filter((e) => e.id !== expenseId))
+    setExpenseSheet(null)
+    showToast('Expense deleted')
+  }
+
+  function handleCategorySaved(category: ExpenseCategory) {
+    const isEdit = categorySheet?.mode === 'edit'
+    setCategories((prev) =>
+      sortCategories(
+        isEdit
+          ? prev.map((c) => (c.id === category.id ? category : c))
+          : [...prev, category],
+      ),
+    )
+    setCategorySheet(null)
+    showToast(isEdit ? 'Category updated' : 'Category created')
+  }
+
+  function handleCategoryDeleted(categoryId: string) {
+    setCategories((prev) => prev.filter((c) => c.id !== categoryId))
+    // The FK is ON DELETE SET NULL, so its expenses survive as uncategorized.
+    setExpenses((prev) =>
+      prev.map((e) =>
+        e.category_id === categoryId ? { ...e, category_id: null } : e,
+      ),
+    )
+    setFilterCategoryId((prev) => (prev === categoryId ? null : prev))
+    setCategorySheet(null)
+    showToast('Category deleted')
   }
 
   function handlePaymentSaved(payment: Payment) {
@@ -126,26 +205,32 @@ export default function GroupDetailPage({
   }
 
   async function handleDeletePayment(paymentId: string) {
-    const { error: delError } = await supabase
+    const { error: deleteError } = await supabase
       .from('payments')
       .delete()
       .eq('id', paymentId)
-    if (delError) {
-      setError(delError.message)
+    if (deleteError) {
+      setError(deleteError.message)
       return
     }
     setPayments((prev) => prev.filter((p) => p.id !== paymentId))
     showToast('Payment deleted')
   }
 
+  const showFab = !loading && (tab === 'expenses' || tab === 'calendar')
+
   return (
-    <main className="min-h-screen bg-app pb-24">
-      <div className="sticky top-0 z-10">
-        <Header group={group} onBack={onBack} onOpenSettings={onOpenSettings} />
-        <Tabs tab={tab} setTab={setTab} />
+    <main className="min-h-screen bg-app pb-28">
+      <div className="sticky top-0 z-10 bg-app">
+        <Header
+          group={group}
+          memberCount={members.length}
+          onBack={onBack}
+          onOpenSettings={onOpenSettings}
+        />
       </div>
 
-      <div className="max-w-[480px] mx-auto px-4 pt-4">
+      <div className="max-w-[480px] mx-auto px-4 pt-1">
         {error && (
           <div
             role="alert"
@@ -160,51 +245,102 @@ export default function GroupDetailPage({
         ) : tab === 'expenses' ? (
           <ExpensesTab
             expenses={expenses}
+            categories={categories}
+            categoryMap={categoryMap}
             nameById={nameById}
             currentUserId={user?.id}
-            isPercentageGroup={
-              group.split_mode === 'percentage' && members.length === 2
-            }
-            onEdit={(expense) => setSheetState({ mode: 'edit', expense })}
-            onDelete={handleDelete}
+            month={activeMonth}
+            setMonth={setMonth}
+            months={months}
+            filterCategoryId={filterCategoryId}
+            setFilterCategoryId={setFilterCategoryId}
+            onOpen={(expense) => setExpenseSheet({ mode: 'edit', expense })}
           />
-        ) : tab === 'payments' ? (
-          <PaymentsTab
-            payments={payments}
+        ) : tab === 'calendar' ? (
+          <CalendarTab
+            expenses={expenses}
+            categoryMap={categoryMap}
             nameById={nameById}
             currentUserId={user?.id}
-            onDelete={handleDeletePayment}
+            month={activeMonth}
+            setMonth={setMonth}
+            months={months}
+            onOpen={(expense) => setExpenseSheet({ mode: 'edit', expense })}
+          />
+        ) : tab === 'categories' ? (
+          <CategoriesTab
+            expenses={expenses}
+            categories={categories}
+            group={group}
+            members={members}
+            month={activeMonth}
+            setMonth={setMonth}
+            months={months}
+            onEditCategory={(category) =>
+              setCategorySheet({ mode: 'edit', category })
+            }
+            onNewCategory={() => setCategorySheet({ mode: 'new' })}
+            onDrillDown={(categoryId) => {
+              setFilterCategoryId(categoryId)
+              setTab('expenses')
+            }}
           />
         ) : (
-          <SettleUpTab
+          <SettleTab
             expenses={expenses}
             payments={payments}
             members={members}
             nameById={nameById}
+            currentUserId={user?.id}
             onRecordPayment={() => setPaymentSheetOpen(true)}
+            onDeletePayment={handleDeletePayment}
           />
         )}
       </div>
 
-      {tab === 'expenses' && !loading && (
+      {showFab && (
         <button
           type="button"
-          onClick={() => setSheetState({ mode: 'new' })}
+          onClick={() => setExpenseSheet({ mode: 'new' })}
           aria-label="Add expense"
-          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-brand text-white text-3xl shadow-lg hover:bg-brand-dark transition flex items-center justify-center"
+          className="fixed bottom-24 right-6 w-14 h-14 rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark transition grid place-items-center z-20"
         >
-          +
+          <PlusIcon size={24} />
         </button>
       )}
 
-      {sheetState && (
+      <BottomNav tab={tab} setTab={setTab} />
+
+      {expenseSheet && (
         <ExpenseSheet
           group={group}
           members={members}
+          categories={categories}
           currentUserId={user?.id ?? ''}
-          existing={sheetState.mode === 'edit' ? sheetState.expense : null}
-          onClose={() => setSheetState(null)}
+          existing={expenseSheet.mode === 'edit' ? expenseSheet.expense : null}
+          defaultCategoryId={
+            filterCategoryId && categoryMap[filterCategoryId]
+              ? filterCategoryId
+              : null
+          }
+          defaultDate={defaultDateFor(activeMonth)}
+          onClose={() => setExpenseSheet(null)}
           onSaved={handleExpenseSaved}
+          onDeleted={handleExpenseDeleted}
+        />
+      )}
+
+      {categorySheet && (
+        <CategorySheet
+          group={group}
+          members={members}
+          existing={
+            categorySheet.mode === 'edit' ? categorySheet.category : null
+          }
+          nextSortOrder={categories.length}
+          onClose={() => setCategorySheet(null)}
+          onSaved={handleCategorySaved}
+          onDeleted={handleCategoryDeleted}
         />
       )}
 
@@ -221,27 +357,34 @@ export default function GroupDetailPage({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Header + Tabs
-// ---------------------------------------------------------------------------
+/**
+ * Date to pre-fill a new expense with: today when the current month is on
+ * screen, otherwise the 1st of whichever month is being browsed.
+ */
+function defaultDateFor(month: string): string {
+  const today = todayISO()
+  return monthKey(today) === month ? today : `${month}-01`
+}
 
 function Header({
   group,
+  memberCount,
   onBack,
   onOpenSettings,
 }: {
   group: Group
+  memberCount: number
   onBack: () => void
   onOpenSettings: () => void
 }) {
   return (
-    <header className="bg-card border-b border-gray-100">
-      <div className="max-w-[480px] mx-auto px-4 py-2 flex items-center gap-2">
+    <header className="bg-app">
+      <div className="max-w-[480px] mx-auto px-3 py-2 flex items-center gap-1.5">
         <button
           type="button"
           onClick={onBack}
           aria-label="Back"
-          className="w-11 h-11 -ml-2 flex items-center justify-center text-gray-700 hover:text-ink"
+          className="w-11 h-11 shrink-0 grid place-items-center rounded-xl text-gray-700 hover:bg-black/5 hover:text-ink transition"
         >
           <svg
             width="20"
@@ -249,22 +392,29 @@ function Header({
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.75"
             strokeLinecap="round"
             strokeLinejoin="round"
+            aria-hidden="true"
           >
             <path d="M19 12H5" />
             <path d="M12 19l-7-7 7-7" />
           </svg>
         </button>
-        <h1 className="flex-1 text-lg font-semibold text-ink truncate">
-          {group.name}
-        </h1>
+        <div className="flex-1 min-w-0 text-center">
+          <h1 className="text-[16.5px] font-bold tracking-tight text-ink truncate">
+            {group.name}
+          </h1>
+          <span className="font-mono text-[10px] tracking-wide text-muted">
+            {memberCount} member{memberCount === 1 ? '' : 's'} · code{' '}
+            {group.invite_code}
+          </span>
+        </div>
         <button
           type="button"
           onClick={onOpenSettings}
           aria-label="Group settings"
-          className="w-11 h-11 -mr-2 flex items-center justify-center text-gray-700 hover:text-ink"
+          className="w-11 h-11 shrink-0 grid place-items-center rounded-xl text-gray-700 hover:bg-black/5 hover:text-ink transition"
         >
           <svg
             width="20"
@@ -272,9 +422,10 @@ function Header({
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.75"
             strokeLinecap="round"
             strokeLinejoin="round"
+            aria-hidden="true"
           >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -282,1146 +433,5 @@ function Header({
         </button>
       </div>
     </header>
-  )
-}
-
-function Tabs({
-  tab,
-  setTab,
-}: {
-  tab: TabKey
-  setTab: (t: TabKey) => void
-}) {
-  const labels: Record<TabKey, string> = {
-    expenses: 'Expenses',
-    payments: 'Payments',
-    settle: 'Settle Up',
-  }
-  return (
-    <div className="bg-card border-b border-gray-100">
-      <div className="max-w-[480px] mx-auto flex">
-        {(['expenses', 'payments', 'settle'] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`flex-1 min-h-[44px] py-3 text-sm font-medium border-b-2 transition ${
-              tab === t
-                ? 'text-brand border-brand'
-                : 'text-muted border-transparent hover:text-ink'
-            }`}
-          >
-            {labels[t]}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Expenses tab
-// ---------------------------------------------------------------------------
-
-function ExpensesTab({
-  expenses,
-  nameById,
-  currentUserId,
-  isPercentageGroup,
-  onEdit,
-  onDelete,
-}: {
-  expenses: ExpenseWithSplits[]
-  nameById: Record<string, string>
-  currentUserId: string | undefined
-  isPercentageGroup: boolean
-  onEdit: (expense: ExpenseWithSplits) => void
-  onDelete: (id: string) => void
-}) {
-  if (expenses.length === 0) {
-    return <EmptyExpenses />
-  }
-
-  return (
-    <ul className="space-y-3">
-      {expenses.map((e) => (
-        <ExpenseCard
-          key={e.id}
-          expense={e}
-          nameById={nameById}
-          currentUserId={currentUserId}
-          isPercentageGroup={isPercentageGroup}
-          onEdit={onEdit}
-          onDelete={onDelete}
-        />
-      ))}
-    </ul>
-  )
-}
-
-function EmptyExpenses() {
-  return (
-    <div className="text-center text-muted py-12 px-4">
-      <div className="mx-auto mb-3 w-14 h-14 rounded-full bg-brand/10 flex items-center justify-center text-brand">
-        <svg
-          width="28"
-          height="28"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M4 2h12l4 4v16H4z" />
-          <path d="M16 2v4h4" />
-          <path d="M8 11h8M8 15h6" />
-        </svg>
-      </div>
-      <p className="text-base text-ink mb-1">No expenses yet</p>
-      <p className="text-sm">Tap the + button to add the first one.</p>
-    </div>
-  )
-}
-
-function ExpenseCard({
-  expense,
-  nameById,
-  currentUserId,
-  isPercentageGroup,
-  onEdit,
-  onDelete,
-}: {
-  expense: ExpenseWithSplits
-  nameById: Record<string, string>
-  currentUserId: string | undefined
-  isPercentageGroup: boolean
-  onEdit: (expense: ExpenseWithSplits) => void
-  onDelete: (id: string) => void
-}) {
-  const isMine = expense.created_by === currentUserId
-  const amount = Number(expense.amount)
-
-  const splitText = (() => {
-    if (expense.splits.length === 0) return null
-    if (isPercentageGroup && amount > 0) {
-      return expense.splits
-        .map((s) => {
-          const pct = Math.round((Number(s.share_amount) / amount) * 100)
-          const name = nameById[s.user_id] ?? 'Unknown'
-          return `${name} ${pct}%`
-        })
-        .join(' · ')
-    }
-    return `Split between ${expense.splits
-      .map((s) => nameById[s.user_id] ?? 'Unknown')
-      .join(', ')}`
-  })()
-
-  const body = (
-    <div className="flex items-start gap-3">
-      <div className="flex-1 min-w-0">
-        <div className="font-medium text-ink truncate">
-          {expense.description}
-        </div>
-        <div className="mt-1 text-xs text-muted">
-          Paid by{' '}
-          <span className="font-medium text-gray-700">
-            {nameById[expense.paid_by] ?? 'Unknown'}
-          </span>
-        </div>
-        {splitText && (
-          <div className="mt-1 text-xs text-muted">{splitText}</div>
-        )}
-      </div>
-      <div className="text-right shrink-0">
-        <div className="font-mono tabular font-semibold text-ink">
-          {formatUSD(Number(expense.amount))}
-        </div>
-        {isMine && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(expense.id)
-            }}
-            className="mt-1 text-xs text-red-600 hover:text-red-700 px-2 py-1"
-          >
-            Delete
-          </button>
-        )}
-      </div>
-    </div>
-  )
-
-  const baseClass = 'bg-card rounded-xl border border-gray-100 shadow-sm p-4'
-
-  if (!isMine) {
-    return <li className={baseClass}>{body}</li>
-  }
-
-  return (
-    <li>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onEdit(expense)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onEdit(expense)
-          }
-        }}
-        className={`${baseClass} cursor-pointer hover:border-brand/40 transition focus:outline-none focus:ring-2 focus:ring-brand`}
-      >
-        {body}
-      </div>
-    </li>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Payments tab
-// ---------------------------------------------------------------------------
-
-function PaymentsTab({
-  payments,
-  nameById,
-  currentUserId,
-  onDelete,
-}: {
-  payments: Payment[]
-  nameById: Record<string, string>
-  currentUserId: string | undefined
-  onDelete: (id: string) => void
-}) {
-  if (payments.length === 0) {
-    return <EmptyPayments />
-  }
-
-  return (
-    <ul className="space-y-3">
-      {payments.map((p) => (
-        <PaymentCard
-          key={p.id}
-          payment={p}
-          nameById={nameById}
-          currentUserId={currentUserId}
-          onDelete={onDelete}
-        />
-      ))}
-    </ul>
-  )
-}
-
-function EmptyPayments() {
-  return (
-    <div className="text-center text-muted py-12 px-4">
-      <div className="mx-auto mb-3 w-14 h-14 rounded-full bg-brand/10 flex items-center justify-center text-brand">
-        <svg
-          width="28"
-          height="28"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M3 7h18M3 12h18M3 17h18" />
-        </svg>
-      </div>
-      <p className="text-base text-ink mb-1">No payments yet</p>
-      <p className="text-sm">Record one from the Settle Up tab.</p>
-    </div>
-  )
-}
-
-function PaymentCard({
-  payment,
-  nameById,
-  currentUserId,
-  onDelete,
-}: {
-  payment: Payment
-  nameById: Record<string, string>
-  currentUserId: string | undefined
-  onDelete: (id: string) => void
-}) {
-  const isMine = payment.created_by === currentUserId
-  const fromName = nameById[payment.paid_by] ?? 'Unknown'
-  const toName = nameById[payment.paid_to] ?? 'Unknown'
-  const note = payment.note?.trim()
-
-  return (
-    <li className="bg-card rounded-xl border border-gray-100 shadow-sm p-4">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-ink">
-            <span className="font-medium">{fromName}</span>
-            <span className="text-muted"> paid </span>
-            <span className="font-medium">{toName}</span>
-          </div>
-          {note && (
-            <div className="mt-1 text-xs text-muted truncate">{note}</div>
-          )}
-        </div>
-        <div className="text-right shrink-0">
-          <div className="font-mono tabular font-semibold text-ink">
-            {formatUSD(Number(payment.amount))}
-          </div>
-          {isMine && (
-            <button
-              type="button"
-              onClick={() => onDelete(payment.id)}
-              className="mt-1 text-xs text-red-600 hover:text-red-700 px-2 py-1"
-            >
-              Delete
-            </button>
-          )}
-        </div>
-      </div>
-    </li>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Settle Up tab
-// ---------------------------------------------------------------------------
-
-function SettleUpTab({
-  expenses,
-  payments,
-  members,
-  nameById,
-  onRecordPayment,
-}: {
-  expenses: ExpenseWithSplits[]
-  payments: Payment[]
-  members: GroupMember[]
-  nameById: Record<string, string>
-  onRecordPayment: () => void
-}) {
-  const { balanceCents, transfers, totalSpent } = useMemo(() => {
-    // Track balances only for current members. Expenses or payments involving
-    // removed members may leave a residual that the settlement algorithm
-    // absorbs.
-    const memberIds = new Set(members.map((m) => m.user_id))
-    const dollars: Record<string, number> = {}
-    for (const m of members) dollars[m.user_id] = 0
-    let total = 0
-    for (const e of expenses) {
-      const amt = Number(e.amount)
-      total += amt
-      if (memberIds.has(e.paid_by)) dollars[e.paid_by] += amt
-      for (const s of e.splits) {
-        if (memberIds.has(s.user_id))
-          dollars[s.user_id] -= Number(s.share_amount)
-      }
-    }
-    for (const p of payments) {
-      const amt = Number(p.amount)
-      if (memberIds.has(p.paid_by)) dollars[p.paid_by] += amt
-      if (memberIds.has(p.paid_to)) dollars[p.paid_to] -= amt
-    }
-    const settlement = greedyPairing(dollars)
-    return {
-      balanceCents: settlement.balances,
-      transfers: settlement.transfers,
-      totalSpent: total,
-    }
-  }, [expenses, payments, members])
-
-  const perPersonAvg = members.length > 0 ? totalSpent / members.length : 0
-
-  return (
-    <div className="space-y-6">
-      <button
-        type="button"
-        onClick={onRecordPayment}
-        className="w-full py-3 bg-brand text-white font-medium rounded-xl hover:bg-brand-dark transition min-h-[44px]"
-      >
-        Record Payment
-      </button>
-
-      <div className="grid grid-cols-3 gap-3 text-center">
-        <Stat label="Total spent" value={formatUSD(totalSpent)} />
-        <Stat label="Per-person avg" value={formatUSD(perPersonAvg)} />
-        <Stat label="Transfers" value={String(transfers.length)} />
-      </div>
-
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2 px-1">
-          Balances
-        </h2>
-        <ul className="bg-card rounded-xl border border-gray-100 shadow-sm divide-y divide-gray-100">
-          {members.map((m) => {
-            const cents = balanceCents[m.user_id] ?? 0
-            const dollars = Math.abs(cents) / 100
-            const color =
-              cents > 0
-                ? 'text-brand'
-                : cents < 0
-                  ? 'text-accent'
-                  : 'text-muted'
-            const label =
-              cents > 0 ? 'is owed' : cents < 0 ? 'owes' : 'is settled'
-            return (
-              <li
-                key={m.user_id}
-                className="px-4 py-3 flex items-center justify-between min-h-[48px]"
-              >
-                <span className="text-ink">{m.display_name}</span>
-                <span className={`text-sm font-medium ${color}`}>
-                  {label}{' '}
-                  <span className="font-mono tabular">
-                    {formatUSD(dollars)}
-                  </span>
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      </section>
-
-      <section>
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2 px-1">
-          Transfers
-        </h2>
-        {transfers.length === 0 ? (
-          <EmptyTransfers />
-        ) : (
-          <ul className="space-y-2">
-            {transfers.map((t, i) => (
-              <li
-                key={i}
-                className="bg-card rounded-xl border border-gray-100 shadow-sm px-4 py-3 flex items-center gap-3"
-              >
-                <span className="font-medium text-ink truncate">
-                  {nameById[t.from] ?? t.from}
-                </span>
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="text-brand shrink-0"
-                  aria-hidden="true"
-                >
-                  <path d="M5 12h14" />
-                  <path d="M12 5l7 7-7 7" />
-                </svg>
-                <span className="flex-1 font-medium text-ink truncate">
-                  {nameById[t.to] ?? t.to}
-                </span>
-                <span className="font-mono tabular font-semibold text-ink shrink-0">
-                  {formatUSD(t.amount)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function EmptyTransfers() {
-  return (
-    <div className="bg-card rounded-xl border border-gray-100 shadow-sm p-8 text-center">
-      <div className="mx-auto mb-3 w-14 h-14 rounded-full bg-brand/10 flex items-center justify-center text-brand">
-        <svg
-          width="28"
-          height="28"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M5 13l4 4L19 7" />
-        </svg>
-      </div>
-      <p className="text-base text-ink">Everyone is already settled!</p>
-    </div>
-  )
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-card rounded-xl border border-gray-100 shadow-sm p-3">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-1 font-mono tabular font-semibold text-ink">
-        {value}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Expense sheet (new + edit)
-// ---------------------------------------------------------------------------
-
-// Splits `amountCents` into per-person dollar amounts, returned in the same
-// order as `userIds`. Without weights, splits evenly (first `amountCents mod
-// n` people get +1 cent). With weights (user_id -> percentage, summing to
-// ~100), floors each ideal share and distributes the unallocated cents to
-// the users with the largest fractional remainders.
-function distributeCents(
-  amountCents: number,
-  userIds: string[],
-  weights?: Record<string, number>,
-): number[] {
-  const n = userIds.length
-  if (n === 0) return []
-
-  if (!weights) {
-    const base = Math.floor(amountCents / n)
-    const extras = amountCents - base * n
-    return userIds.map((_, i) => (i < extras ? base + 1 : base) / 100)
-  }
-
-  const ideals = userIds.map(
-    (uid) => (amountCents * (weights[uid] ?? 0)) / 100,
-  )
-  const floors = ideals.map((x) => Math.floor(x))
-  const fractions = ideals.map((x, i) => x - floors[i])
-  const allocated = floors.reduce((s, c) => s + c, 0)
-  const remainder = amountCents - allocated
-
-  // Indices sorted by fractional part desc, with stable index tiebreak.
-  const indices = userIds
-    .map((_, i) => i)
-    .sort((a, b) => fractions[b] - fractions[a] || a - b)
-
-  const result = [...floors]
-  for (let i = 0; i < remainder; i++) {
-    result[indices[i]] += 1
-  }
-  return result.map((c) => c / 100)
-}
-
-function ExpenseSheet({
-  group,
-  members,
-  currentUserId,
-  existing,
-  onClose,
-  onSaved,
-}: {
-  group: Group
-  members: GroupMember[]
-  currentUserId: string
-  existing: ExpenseWithSplits | null
-  onClose: () => void
-  onSaved: (expense: ExpenseWithSplits) => void
-}) {
-  const isEdit = existing !== null
-  const isPercentageGroup =
-    group.split_mode === 'percentage' && members.length === 2
-
-  const initialPaidBy = existing
-    ? existing.paid_by
-    : (members.find((m) => m.user_id === currentUserId)?.user_id ??
-      members[0]?.user_id ??
-      '')
-
-  const [description, setDescription] = useState(existing?.description ?? '')
-  const [amount, setAmount] = useState(
-    existing ? String(Number(existing.amount)) : '',
-  )
-  const [paidBy, setPaidBy] = useState(initialPaidBy)
-  const [splitBetween, setSplitBetween] = useState<Set<string>>(
-    () =>
-      new Set(
-        existing
-          ? existing.splits.map((s) => s.user_id)
-          : members.map((m) => m.user_id),
-      ),
-  )
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // Pre-fill percentages from group defaults, or reverse-compute from
-  // existing splits when editing.
-  const [pctInputs, setPctInputs] = useState<Record<string, string>>(() => {
-    if (!isPercentageGroup) return {}
-    const result: Record<string, string> = {}
-    if (existing && existing.splits.length === 2 && Number(existing.amount) > 0) {
-      const total = Number(existing.amount)
-      for (const s of existing.splits) {
-        const pct = (Number(s.share_amount) / total) * 100
-        // Two-decimal rounding for clean display.
-        result[s.user_id] = String(Math.round(pct * 100) / 100)
-      }
-    }
-    for (const m of members) {
-      if (!(m.user_id in result)) {
-        result[m.user_id] = String(Number(m.split_percentage ?? 50))
-      }
-    }
-    return result
-  })
-
-  // Auto-open Adjust when editing an expense whose splits don't match what
-  // the group's defaults would produce — signals it's already customized.
-  const [customizeOpen, setCustomizeOpen] = useState(() => {
-    if (!existing || !isPercentageGroup) return false
-    const total = Math.round(Number(existing.amount) * 100)
-    if (total <= 0) return false
-    const ids = members.map((m) => m.user_id)
-    const defaultWeights: Record<string, number> = {}
-    for (const m of members) {
-      defaultWeights[m.user_id] = Number(m.split_percentage ?? 50)
-    }
-    const defaultShares = distributeCents(total, ids, defaultWeights)
-    const existingCentsByUser = new Map(
-      existing.splits.map((s) => [
-        s.user_id,
-        Math.round(Number(s.share_amount) * 100),
-      ]),
-    )
-    return ids.some((uid, i) => {
-      const existingCents = existingCentsByUser.get(uid) ?? 0
-      return existingCents !== Math.round(defaultShares[i] * 100)
-    })
-  })
-
-  function toggleSplit(userId: string) {
-    setSplitBetween((prev) => {
-      const next = new Set(prev)
-      if (next.has(userId)) next.delete(userId)
-      else next.add(userId)
-      return next
-    })
-  }
-
-  function updatePct(userId: string, val: string) {
-    const num = parseFloat(val)
-    const other = members.find((m) => m.user_id !== userId)
-    setPctInputs((prev) => {
-      const next = { ...prev, [userId]: val }
-      if (other && Number.isFinite(num)) {
-        const otherVal = Math.round((100 - num) * 100) / 100
-        next[other.user_id] = String(otherVal)
-      }
-      return next
-    })
-  }
-
-  function toggleCustomize() {
-    if (customizeOpen) {
-      // Closing: reset to group defaults, discarding any per-expense edits.
-      const defaults: Record<string, string> = {}
-      for (const m of members) {
-        defaults[m.user_id] = String(Number(m.split_percentage ?? 50))
-      }
-      setPctInputs(defaults)
-    }
-    setCustomizeOpen((o) => !o)
-  }
-
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const amtNum = parseFloat(amount)
-    const ids = [...splitBetween]
-
-    if (!description.trim()) {
-      setError('Add a description')
-      return
-    }
-    if (!Number.isFinite(amtNum) || amtNum <= 0) {
-      setError('Enter an amount greater than 0')
-      return
-    }
-    if (!paidBy) {
-      setError('Pick who paid')
-      return
-    }
-    if (ids.length === 0) {
-      setError('Pick at least one person to split with')
-      return
-    }
-
-    // Build weights for percentage groups when both members are involved.
-    // For single-selected (1 person) or non-percentage groups, fall through
-    // to even-split.
-    let weights: Record<string, number> | undefined
-    if (isPercentageGroup && ids.length === 2) {
-      const w: Record<string, number> = {}
-      for (const uid of ids) {
-        const pct = parseFloat(pctInputs[uid] ?? '50')
-        if (!Number.isFinite(pct)) {
-          setError('Enter valid percentages')
-          return
-        }
-        w[uid] = pct
-      }
-      const sum = ids.reduce((s, uid) => s + w[uid], 0)
-      if (Math.abs(sum - 100) > 0.5) {
-        setError('Percentages must sum to 100')
-        return
-      }
-      weights = w
-    }
-
-    setSubmitting(true)
-    setError(null)
-
-    const totalCents = Math.round(amtNum * 100)
-    const shares = distributeCents(totalCents, ids, weights)
-    const trimmed = description.trim()
-
-    if (existing) {
-      // --- Edit flow ---------------------------------------------------------
-      // Not atomic; the operations are sequential. If anything fails mid-way,
-      // the user can re-submit: UPDATE is idempotent, DELETE-with-no-rows is
-      // a no-op, and INSERT will refill what's missing.
-      const { error: updateError } = await supabase
-        .from('expenses')
-        .update({ description: trimmed, amount: amtNum, paid_by: paidBy })
-        .eq('id', existing.id)
-      if (updateError) {
-        setError(updateError.message)
-        setSubmitting(false)
-        return
-      }
-
-      const { error: deleteError } = await supabase
-        .from('expense_splits')
-        .delete()
-        .eq('expense_id', existing.id)
-      if (deleteError) {
-        setError(deleteError.message)
-        setSubmitting(false)
-        return
-      }
-
-      const splitRows = ids.map((userId, i) => ({
-        expense_id: existing.id,
-        user_id: userId,
-        share_amount: shares[i],
-      }))
-      const { data: newSplits, error: insertSplitsError } = await supabase
-        .from('expense_splits')
-        .insert(splitRows)
-        .select()
-      if (insertSplitsError || !newSplits) {
-        setError(insertSplitsError?.message ?? 'Could not save splits')
-        setSubmitting(false)
-        return
-      }
-
-      setSubmitting(false)
-      onSaved({
-        ...existing,
-        description: trimmed,
-        amount: amtNum,
-        paid_by: paidBy,
-        splits: newSplits,
-      })
-      return
-    }
-
-    // --- New flow ------------------------------------------------------------
-    const { data: inserted, error: insertExpenseError } = await supabase
-      .from('expenses')
-      .insert({
-        group_id: group.id,
-        description: trimmed,
-        amount: amtNum,
-        paid_by: paidBy,
-        created_by: currentUserId,
-      })
-      .select()
-      .single()
-
-    if (insertExpenseError || !inserted) {
-      setError(insertExpenseError?.message ?? 'Could not add expense')
-      setSubmitting(false)
-      return
-    }
-
-    const splitRows = ids.map((userId, i) => ({
-      expense_id: inserted.id,
-      user_id: userId,
-      share_amount: shares[i],
-    }))
-    const { data: splits, error: splitsError } = await supabase
-      .from('expense_splits')
-      .insert(splitRows)
-      .select()
-
-    if (splitsError || !splits) {
-      await supabase.from('expenses').delete().eq('id', inserted.id)
-      setError(splitsError?.message ?? 'Could not save splits')
-      setSubmitting(false)
-      return
-    }
-
-    setSubmitting(false)
-    onSaved({ ...inserted, splits })
-  }
-
-  return (
-    <Sheet title={isEdit ? 'Edit Expense' : 'New Expense'} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="exp-description"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Description
-          </label>
-          <input
-            id="exp-description"
-            type="text"
-            autoFocus
-            required
-            maxLength={120}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Dinner, groceries, …"
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="exp-amount"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Amount
-          </label>
-          <input
-            id="exp-amount"
-            type="number"
-            inputMode="decimal"
-            step="0.01"
-            min="0"
-            required
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="0.00"
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="exp-paid-by"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Paid by
-          </label>
-          <select
-            id="exp-paid-by"
-            value={paidBy}
-            onChange={(e) => setPaidBy(e.target.value)}
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent bg-card"
-          >
-            {members.map((m) => (
-              <option key={m.user_id} value={m.user_id}>
-                {m.display_name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <span className="block text-sm font-medium text-gray-700 mb-2">
-            Split between
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {members.map((m) => {
-              const active = splitBetween.has(m.user_id)
-              return (
-                <button
-                  key={m.user_id}
-                  type="button"
-                  onClick={() => toggleSplit(m.user_id)}
-                  className={`px-3 py-2 rounded-full text-sm border transition min-h-[36px] ${
-                    active
-                      ? 'bg-brand text-white border-brand'
-                      : 'bg-card text-gray-700 border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  {m.display_name}
-                </button>
-              )
-            })}
-          </div>
-
-          {isPercentageGroup &&
-            splitBetween.size === 2 &&
-            (() => {
-              const amtNum = parseFloat(amount)
-              const validAmount = Number.isFinite(amtNum) && amtNum > 0
-              const ids = members
-                .map((m) => m.user_id)
-                .filter((u) => splitBetween.has(u))
-              const weights: Record<string, number> = {}
-              for (const uid of ids) {
-                const pct = parseFloat(pctInputs[uid] ?? '50')
-                weights[uid] = Number.isFinite(pct) ? pct : 0
-              }
-              const previewShares = validAmount
-                ? distributeCents(Math.round(amtNum * 100), ids, weights)
-                : ids.map(() => 0)
-
-              return (
-                <div className="mt-3 text-xs text-muted">
-                  <span className="font-mono tabular text-ink">
-                    {previewShares.map((s) => formatUSD(s)).join(' / ')}
-                  </span>
-                  {' · '}
-                  <button
-                    type="button"
-                    onClick={toggleCustomize}
-                    className="text-brand font-medium hover:text-brand-dark"
-                  >
-                    {customizeOpen ? 'Use group default' : 'Adjust'}
-                  </button>
-                  {customizeOpen && (
-                    <div className="mt-3 bg-card rounded-lg border border-gray-100 px-4 py-4">
-                      <SplitSlider
-                        leftName={members[0].display_name}
-                        rightName={members[1].display_name}
-                        value={parseFloat(
-                          pctInputs[members[0].user_id] ?? '50',
-                        )}
-                        onChange={(v) =>
-                          updatePct(members[0].user_id, String(v))
-                        }
-                      />
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-        </div>
-
-        {error && (
-          <div
-            role="alert"
-            className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
-          >
-            {error}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full py-3 bg-brand text-white font-medium rounded-lg hover:bg-brand-dark disabled:opacity-60 disabled:cursor-not-allowed transition min-h-[44px]"
-        >
-          {submitting
-            ? isEdit
-              ? 'Saving…'
-              : 'Adding…'
-            : isEdit
-              ? 'Save Changes'
-              : 'Add Expense'}
-        </button>
-      </form>
-    </Sheet>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Payment sheet
-// ---------------------------------------------------------------------------
-
-function PaymentSheet({
-  group,
-  members,
-  currentUserId,
-  onClose,
-  onSaved,
-}: {
-  group: Group
-  members: GroupMember[]
-  currentUserId: string
-  onClose: () => void
-  onSaved: (payment: Payment) => void
-}) {
-  const initialFrom =
-    members.find((m) => m.user_id === currentUserId)?.user_id ??
-    members[0]?.user_id ??
-    ''
-  const initialTo =
-    members.find((m) => m.user_id !== initialFrom)?.user_id ?? ''
-
-  const [paidBy, setPaidBy] = useState(initialFrom)
-  const [paidTo, setPaidTo] = useState(initialTo)
-  const [amount, setAmount] = useState('')
-  const [note, setNote] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const amtNum = parseFloat(amount)
-
-    if (!paidBy || !paidTo) {
-      setError('Pick both people')
-      return
-    }
-    if (paidBy === paidTo) {
-      setError('From and To must be different')
-      return
-    }
-    if (!Number.isFinite(amtNum) || amtNum <= 0) {
-      setError('Enter an amount greater than 0')
-      return
-    }
-
-    setSubmitting(true)
-    setError(null)
-
-    const trimmedNote = note.trim()
-    const { data: inserted, error: insertError } = await supabase
-      .from('payments')
-      .insert({
-        group_id: group.id,
-        paid_by: paidBy,
-        paid_to: paidTo,
-        amount: amtNum,
-        note: trimmedNote ? trimmedNote : null,
-        created_by: currentUserId,
-      })
-      .select()
-      .single()
-
-    if (insertError || !inserted) {
-      setError(insertError?.message ?? 'Could not record payment')
-      setSubmitting(false)
-      return
-    }
-
-    setSubmitting(false)
-    onSaved(inserted)
-  }
-
-  return (
-    <Sheet title="Record Payment" onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="pay-from"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            From
-          </label>
-          <select
-            id="pay-from"
-            value={paidBy}
-            onChange={(e) => setPaidBy(e.target.value)}
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent bg-card"
-          >
-            {members.map((m) => (
-              <option key={m.user_id} value={m.user_id}>
-                {m.display_name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label
-            htmlFor="pay-to"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            To
-          </label>
-          <select
-            id="pay-to"
-            value={paidTo}
-            onChange={(e) => setPaidTo(e.target.value)}
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent bg-card"
-          >
-            {members.map((m) => (
-              <option key={m.user_id} value={m.user_id}>
-                {m.display_name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label
-            htmlFor="pay-amount"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Amount
-          </label>
-          <input
-            id="pay-amount"
-            type="number"
-            inputMode="decimal"
-            step="0.01"
-            min="0"
-            required
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="0.00"
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="pay-note"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Note <span className="text-muted font-normal">(optional)</span>
-          </label>
-          <input
-            id="pay-note"
-            type="text"
-            maxLength={200}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Venmo, cash, …"
-            className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent"
-          />
-        </div>
-
-        {error && (
-          <div
-            role="alert"
-            className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
-          >
-            {error}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full py-3 bg-brand text-white font-medium rounded-lg hover:bg-brand-dark disabled:opacity-60 disabled:cursor-not-allowed transition min-h-[44px]"
-        >
-          {submitting ? 'Saving…' : 'Record Payment'}
-        </button>
-      </form>
-    </Sheet>
-  )
-}
-
-function formatUSD(dollars: number): string {
-  return (
-    '$' +
-    dollars.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
   )
 }

@@ -506,6 +506,10 @@ export default function GroupSettingsPage({
                     )}
                   </div>
                 )}
+                <p className="mt-2 px-1 text-xs text-muted">
+                  Individual categories can override this default from the
+                  Categories tab.
+                </p>
               </Section>
             )}
 
