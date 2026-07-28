@@ -48,6 +48,23 @@ end $$;
 alter table public.group_members
   add column if not exists split_percentage numeric;
 
+-- Per-group expense categories. `split_mode = 'custom'` means new expenses in
+-- this category start from `split_weights` (a { user_id: percentage } object
+-- summing to ~100) instead of the group-wide default.
+create table if not exists public.expense_categories (
+  id            uuid primary key default gen_random_uuid(),
+  group_id      uuid not null references public.groups (id) on delete cascade,
+  name          text not null,
+  color         text not null default '#2F5D50',
+  icon          text not null default 'tag',
+  split_mode    text not null default 'group'
+                check (split_mode in ('group', 'custom')),
+  split_weights jsonb,
+  sort_order    integer not null default 0,
+  created_at    timestamptz not null default now(),
+  unique (group_id, name)
+);
+
 create table if not exists public.expenses (
   id          uuid primary key default gen_random_uuid(),
   group_id    uuid not null references public.groups (id) on delete cascade,
@@ -55,8 +72,30 @@ create table if not exists public.expenses (
   amount      numeric not null,
   paid_by     uuid not null references auth.users (id),
   created_by  uuid not null references auth.users (id),
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  category_id uuid references public.expense_categories (id) on delete set null,
+  spent_at    date not null default current_date
 );
+
+-- Idempotent migrations for existing schemas; no-op on fresh installs.
+-- `spent_at` is added nullable, backfilled from created_at (so historical
+-- expenses land on the month they were logged), then tightened.
+alter table public.expenses
+  add column if not exists category_id uuid
+    references public.expense_categories (id) on delete set null;
+
+alter table public.expenses
+  add column if not exists spent_at date;
+
+update public.expenses
+   set spent_at = (created_at at time zone 'UTC')::date
+ where spent_at is null;
+
+alter table public.expenses
+  alter column spent_at set default current_date;
+
+alter table public.expenses
+  alter column spent_at set not null;
 
 create table if not exists public.expense_splits (
   id           uuid primary key default gen_random_uuid(),
@@ -84,6 +123,9 @@ create index if not exists groups_invite_code_idx       on public.groups (invite
 create index if not exists group_members_user_id_idx    on public.group_members (user_id);
 create index if not exists group_members_group_id_idx   on public.group_members (group_id);
 create index if not exists expenses_group_id_idx        on public.expenses (group_id);
+create index if not exists expenses_category_id_idx     on public.expenses (category_id);
+create index if not exists expenses_group_spent_at_idx  on public.expenses (group_id, spent_at desc);
+create index if not exists expense_categories_group_id_idx on public.expense_categories (group_id);
 create index if not exists expense_splits_expense_id_idx on public.expense_splits (expense_id);
 create index if not exists expense_splits_user_id_idx   on public.expense_splits (user_id);
 create index if not exists payments_group_id_idx       on public.payments (group_id);
@@ -117,8 +159,9 @@ grant execute on function public.is_group_member(uuid) to authenticated;
 -- Row Level Security
 -- ----------------------------------------------------------------------------
 
-alter table public.groups          enable row level security;
-alter table public.group_members   enable row level security;
+alter table public.groups             enable row level security;
+alter table public.group_members      enable row level security;
+alter table public.expense_categories enable row level security;
 alter table public.expenses        enable row level security;
 alter table public.expense_splits  enable row level security;
 alter table public.payments        enable row level security;
@@ -175,6 +218,29 @@ create policy group_members_update_self on public.group_members
 
 create policy group_members_delete_self on public.group_members
   for delete using (user_id = auth.uid());
+
+-- expense_categories ---------------------------------------------------------
+-- Categories are shared group config: any member can read, add, rename, or
+-- remove them. Deleting one leaves its expenses in place (category_id is set
+-- to null by the FK), so they show up as uncategorized rather than vanishing.
+drop policy if exists expense_categories_select_in_group on public.expense_categories;
+drop policy if exists expense_categories_insert_in_group on public.expense_categories;
+drop policy if exists expense_categories_update_in_group on public.expense_categories;
+drop policy if exists expense_categories_delete_in_group on public.expense_categories;
+
+create policy expense_categories_select_in_group on public.expense_categories
+  for select using (public.is_group_member(group_id));
+
+create policy expense_categories_insert_in_group on public.expense_categories
+  for insert with check (public.is_group_member(group_id));
+
+create policy expense_categories_update_in_group on public.expense_categories
+  for update
+    using (public.is_group_member(group_id))
+    with check (public.is_group_member(group_id));
+
+create policy expense_categories_delete_in_group on public.expense_categories
+  for delete using (public.is_group_member(group_id));
 
 -- expenses -------------------------------------------------------------------
 drop policy if exists expenses_select_in_group  on public.expenses;

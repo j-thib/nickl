@@ -5,6 +5,8 @@
 A free, installable Splitwise alternative built as a Progressive Web App. Create a group, share an invite code, log who paid for what, and let the greedy-pairing algorithm settle everyone up in at most `k-1` transfers for `k` people.
 
 - 💸 Expense logging with custom splits
+- 🗓️ Month-by-month calendar view of everything the group has spent
+- 🏷️ Categories with per-category default splits and monthly breakdowns
 - 🤝 Groups joined by 6-character invite codes
 - 🧮 Optimal-ish debt settlement (greedy pairing, integer-cent precision)
 - 📱 Installable PWA — works offline once loaded
@@ -27,14 +29,41 @@ Backed by [Supabase](https://supabase.com) (Postgres + Auth) on the free tier; h
 
 ```
 src/
-  components/    Spinner, Sheet (bottom-sheet modal)
+  components/    Spinner, Sheet (bottom-sheet modal), BottomNav, MonthBar,
+                 Icon set, CategoryDot, SplitSlider, EmptyState
   contexts/      AuthContext, ToastContext
-  lib/           supabase client, generated types, settlement algorithm
+  lib/           supabase client, generated types, settlement algorithm,
+                 split/date/money helpers, category palette + defaults
   pages/         AuthPage, GroupListPage, GroupDetailPage, GroupSettingsPage
+  pages/group/   The four tabs behind the bottom nav (Expenses, Calendar,
+                 Categories, Settle) plus the expense/category/payment sheets
 supabase/
   schema.sql     Tables, indexes, RLS policies, RPCs — apply once per project
 legacy/          The original Python/Streamlit version
 ```
+
+## Categories, calendar, and split defaults
+
+Every group gets a starter set of categories (Groceries, Utilities, Rent,
+Supplies) the first time someone opens it; more can be added from the
+**Categories** tab, each with its own colour and icon.
+
+A category can carry its own **default split**. Precedence when a new expense
+is created, most specific first:
+
+1. a per-expense adjustment made in the expense sheet,
+2. the category's `split_weights`, when its `split_mode` is `custom`,
+3. the group's own default — percentage for a 2-person group in percentage
+   mode, otherwise an even split.
+
+If an expense only involves some of the people a category's weights cover, the
+weights are renormalized to 100% across whoever is actually on it.
+
+Expenses carry a `spent_at` date (not just `created_at`), which is what the
+**Calendar** tab groups by: a month scrubber, a spend heat-map, per-day
+drill-down, and a 6-month trend. Existing expenses are backfilled from
+`created_at` when the schema migration runs. Deleting a category leaves its
+expenses in place — they show up as uncategorized.
 
 ## Setup
 

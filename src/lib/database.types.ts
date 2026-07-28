@@ -84,6 +84,50 @@ export interface Database {
           },
         ]
       }
+      expense_categories: {
+        Row: {
+          id: string
+          group_id: string
+          name: string
+          color: string
+          icon: string
+          split_mode: 'group' | 'custom'
+          split_weights: Record<string, number> | null
+          sort_order: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          group_id: string
+          name: string
+          color?: string
+          icon?: string
+          split_mode?: 'group' | 'custom'
+          split_weights?: Record<string, number> | null
+          sort_order?: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          group_id?: string
+          name?: string
+          color?: string
+          icon?: string
+          split_mode?: 'group' | 'custom'
+          split_weights?: Record<string, number> | null
+          sort_order?: number
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'expense_categories_group_id_fkey'
+            columns: ['group_id']
+            isOneToOne: false
+            referencedRelation: 'groups'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       expenses: {
         Row: {
           id: string
@@ -93,6 +137,8 @@ export interface Database {
           paid_by: string
           created_by: string
           created_at: string
+          category_id: string | null
+          spent_at: string
         }
         Insert: {
           id?: string
@@ -102,6 +148,8 @@ export interface Database {
           paid_by: string
           created_by: string
           created_at?: string
+          category_id?: string | null
+          spent_at?: string
         }
         Update: {
           id?: string
@@ -111,6 +159,8 @@ export interface Database {
           paid_by?: string
           created_by?: string
           created_at?: string
+          category_id?: string | null
+          spent_at?: string
         }
         Relationships: [
           {
@@ -118,6 +168,13 @@ export interface Database {
             columns: ['group_id']
             isOneToOne: false
             referencedRelation: 'groups'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'expenses_category_id_fkey'
+            columns: ['category_id']
+            isOneToOne: false
+            referencedRelation: 'expense_categories'
             referencedColumns: ['id']
           },
           {
@@ -276,5 +333,7 @@ export interface Database {
 export type Group = Database['public']['Tables']['groups']['Row']
 export type GroupMember = Database['public']['Tables']['group_members']['Row']
 export type Expense = Database['public']['Tables']['expenses']['Row']
+export type ExpenseCategory =
+  Database['public']['Tables']['expense_categories']['Row']
 export type ExpenseSplit = Database['public']['Tables']['expense_splits']['Row']
 export type Payment = Database['public']['Tables']['payments']['Row']
