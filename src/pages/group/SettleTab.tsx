@@ -62,11 +62,11 @@ export default function SettleTab({
   return (
     <div className="pt-3">
       <div className="flex flex-col bg-card border border-black/[.045] rounded-[18px] p-4">
-        <span className="font-mono text-[10px] uppercase tracking-[.13em] text-muted">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
           {yourCents >= 0 ? "You're owed" : 'You owe'}
         </span>
         <span
-          className={`font-display text-[40px] leading-tight tracking-tight mt-0.5 mb-3.5 ${
+          className={`font-mono tabular text-[32px] font-semibold leading-tight tracking-tight mt-0.5 mb-3.5 ${
             yourCents >= 0 ? 'text-brand' : 'text-accent'
           }`}
         >
@@ -222,7 +222,7 @@ function SectionHead({
   trailing?: string
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 px-1 pt-6 pb-2 font-mono text-[10px] uppercase tracking-[.12em] text-muted">
+    <div className="flex items-baseline justify-between gap-3 px-1 pt-6 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
       <span>{label}</span>
       {trailing && <span>{trailing}</span>}
     </div>

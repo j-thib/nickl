@@ -81,7 +81,7 @@ export default function ExpensesTab({
       <MonthBar month={month} setMonth={setMonth} months={months} />
 
       <div className="flex items-baseline justify-between px-1 pt-3 pb-3">
-        <span className="font-mono text-[10px] uppercase tracking-[.13em] text-muted truncate">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted truncate">
           {filterName} · {monthLabel(month)}
         </span>
         <span className="font-mono tabular text-[19px] font-semibold text-ink">
@@ -130,7 +130,7 @@ export default function ExpensesTab({
       ) : (
         days.map((day) => (
           <section key={day.date} className="mb-4">
-            <div className="flex items-baseline justify-between gap-3 px-1 pb-2 font-mono text-[10px] uppercase tracking-[.12em] text-muted">
+            <div className="flex items-baseline justify-between gap-3 px-1 pb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
               <span className="truncate">
                 {formatWeekday(day.date)}, {formatDayShort(day.date)}
               </span>
