@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from './contexts/AuthContext'
 import AuthPage from './pages/AuthPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import GroupListPage from './pages/GroupListPage'
 import GroupDetailPage from './pages/GroupDetailPage'
 import GroupSettingsPage from './pages/GroupSettingsPage'
@@ -13,8 +14,15 @@ type Route =
   | { name: 'settings'; group: Group }
 
 function App() {
-  const { user, loading } = useAuth()
+  const { user, loading, recovering } = useAuth()
   const [route, setRoute] = useState<Route>({ name: 'list' })
+
+  // Takes precedence over everything: a reset link signs the user in, so this
+  // is the only thing standing between them and the app while their password
+  // is still unknown to them. The page handles its own loading state.
+  if (recovering) {
+    return <ResetPasswordPage />
+  }
 
   if (loading) {
     return (
