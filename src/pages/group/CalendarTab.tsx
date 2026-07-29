@@ -23,6 +23,7 @@ type Props = {
   expenses: ExpenseWithSplits[]
   categoryMap: CategoryMap
   nameById: Record<string, string>
+  memberCount: number
   currentUserId: string | undefined
   month: string
   setMonth: (month: string) => void
@@ -34,6 +35,7 @@ export default function CalendarTab({
   expenses,
   categoryMap,
   nameById,
+  memberCount,
   currentUserId,
   month,
   setMonth,
@@ -212,6 +214,7 @@ export default function CalendarTab({
                 expense={e}
                 categories={categoryMap}
                 nameById={nameById}
+                memberCount={memberCount}
                 onOpen={e.created_by === currentUserId ? onOpen : undefined}
               />
             ))}

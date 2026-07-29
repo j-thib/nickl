@@ -247,6 +247,7 @@ export default function GroupDetailPage({
             categories={categories}
             categoryMap={categoryMap}
             nameById={nameById}
+            memberCount={members.length}
             currentUserId={user?.id}
             month={activeMonth}
             setMonth={setMonth}
@@ -260,6 +261,7 @@ export default function GroupDetailPage({
             expenses={expenses}
             categoryMap={categoryMap}
             nameById={nameById}
+            memberCount={members.length}
             currentUserId={user?.id}
             month={activeMonth}
             setMonth={setMonth}
