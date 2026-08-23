@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import MonthBar from '../../components/MonthBar'
 import ExpenseRow from './ExpenseRow'
 import { UNCATEGORIZED_COLOR, withAlpha } from '../../lib/categories'
@@ -66,6 +66,29 @@ export default function CalendarTab({
     [expenses, month],
   )
 
+  // What each person is liable for this month: the sum of their split shares,
+  // which is unrelated to what they actually paid out of pocket.
+  const perPerson = useMemo(() => {
+    const totals: Record<string, number> = {}
+    // Seeded in group order so the line reads the same from month to month,
+    // and members with nothing owed this month still show up at $0.00.
+    for (const uid of Object.keys(nameById)) totals[uid] = 0
+    for (const e of inMonth) {
+      for (const s of e.splits) {
+        totals[s.user_id] = (totals[s.user_id] ?? 0) + Number(s.share_amount)
+      }
+    }
+    return Object.entries(totals)
+      // Someone since removed from the group only appears if they still carry
+      // a share, so the parts keep adding up to the month's total.
+      .filter(([uid, amount]) => uid in nameById || amount !== 0)
+      .map(([uid, amount]) => ({
+        uid,
+        name: nameById[uid] ?? 'Unknown',
+        amount,
+      }))
+  }, [inMonth, nameById])
+
   const byDay = useMemo(() => {
     const out: Record<number, ExpenseWithSplits[]> = {}
     for (const e of inMonth) {
@@ -128,6 +151,25 @@ export default function CalendarTab({
           >
             {delta > 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs{' '}
             {monthAbbr(previousKey)}
+          </span>
+        )}
+        {total > 0 && perPerson.length > 0 && (
+          <span className="mt-1.5 flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-muted">
+            {perPerson.map((p, i) => (
+              <Fragment key={p.uid}>
+                {i > 0 && (
+                  <span aria-hidden="true" className="text-muted/45">
+                    ·
+                  </span>
+                )}
+                <span className="whitespace-nowrap">
+                  {p.name}:{' '}
+                  <span className="font-mono tabular font-semibold text-ink/75">
+                    {formatUSD(p.amount)}
+                  </span>
+                </span>
+              </Fragment>
+            ))}
           </span>
         )}
       </div>
