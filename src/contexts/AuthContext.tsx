@@ -56,12 +56,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return
-      setSession(data.session)
-      setUser(data.session?.user ?? null)
-      setLoading(false)
-    })
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active) return
+        setSession(data.session)
+        setUser(data.session?.user ?? null)
+      })
+      .catch(() => {
+        // Supabase is unreachable. Fall through to the signed-out UI instead
+        // of leaving the whole app on its loading spinner -- the sign-in form
+        // will surface the actual error as soon as it's tried.
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
     const { data: subscription } = supabase.auth.onAuthStateChange(
       (event, nextSession) => {
